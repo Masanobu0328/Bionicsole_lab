@@ -24,10 +24,10 @@ type State = {
     activeFootSide: 'left' | 'right'; // For UI toggle in Step 6
     archSettingsRight: ArchSettings;
     archSettingsLeft: ArchSettings;
-    
+
     useGridCells: boolean;
     gridCellHeights: Record<string, number>;
-    
+
     // Arch Curves (Step 5)
     archCurves: ArchCurves | null;
 
@@ -45,7 +45,7 @@ type State = {
     outlineImageSize: { width: number; height: number };
     outlinePoints: { x: number; y: number }[];
     outlineScale: number; // Pixels per mm or similar reference
-    
+
     // Landmarks State (Percentages along X-axis 0-100)
     landmarkConfig: Record<string, number>;
     // Width Guidelines State (Percentages along Y-axis 0=Lateral, 100=Medial)
@@ -58,7 +58,7 @@ type State = {
     setPatientId: (id: string) => void;
     setFootSide: (side: 'left' | 'right') => void;
     setFlipOrientation: (flip: boolean) => void;
-    
+
     setOutlineImage: (img: string | null) => void;
     setOutlineImageTransform: (transform: Partial<{ x: number; y: number; scale: number; rotation: number; opacity: number; flipX: boolean; flipY: boolean }>) => void;
     setOutlineImageSize: (size: { width: number; height: number }) => void;
@@ -67,7 +67,7 @@ type State = {
     setLandmarkConfig: (config: Record<string, number>) => void;
     updateLandmarkPos: (id: string, percent: number) => void;
     setWidthConfig: (config: Record<string, number>) => void;
-    updateWidthConfig: (id, percent) => void;
+    updateWidthConfig: (id: string, percent: number) => void;
     setActiveLandmarkId: (id: string | null) => void;
 
     setBaseThickness: (val: number) => void;
@@ -81,11 +81,11 @@ type State = {
     setEnableLattice: (val: boolean) => void;
     setLatticeCellSize: (val: number) => void;
     setStrutRadius: (val: number) => void;
-    
+
     // Updated Actions for Arch Settings
     setActiveFootSide: (side: 'left' | 'right') => void;
     updateArchSettings: (side: 'left' | 'right', settings: Partial<ArchSettings>) => void;
-    
+
     setUseGridCells: (val: boolean) => void;
     setGridCellHeight: (id: string, val: number) => void;
     setArchCurves: (curves: ArchCurves | null) => void;
@@ -96,9 +96,10 @@ type State = {
     setCurrentModelUrl: (url: string | null) => void;
     setStlUrl: (url: string | null) => void;
     setLatticeInfo: (info: any) => void;
+    latticeInfo: any;
     savePatientPreset: (patientId?: string) => boolean;
     loadPatientPreset: (patientId?: string) => boolean;
-    
+
     // Getter helper
     get selectedPatient(): Patient | undefined;
 };
@@ -185,10 +186,10 @@ export const useStore = create<State>((set, get) => ({
     activeFootSide: 'right', // Default to right for editing
     archSettingsRight: { ...DEFAULT_ARCH_SETTINGS },
     archSettingsLeft: { ...DEFAULT_ARCH_SETTINGS },
-    
+
     useGridCells: false,
     gridCellHeights: INITIAL_GRID_HEIGHTS,
-    
+
     archCurves: null,
 
     currentStep: STEPS.PATIENT,
@@ -198,7 +199,7 @@ export const useStore = create<State>((set, get) => ({
     currentModelUrl: null,
     stlUrl: null,
     latticeInfo: null,
-    
+
     outlineImage: null,
     outlineImageTransform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 0.5, flipX: false, flipY: false },
     outlineImageSize: { width: 100, height: 100 },
@@ -248,12 +249,12 @@ export const useStore = create<State>((set, get) => ({
         landmarkConfig: { ...state.landmarkConfig, [id]: percent }
     })),
     setWidthConfig: (config) => set({ widthConfig: config }),
-    updateWidthConfig: (id, percent) => set((state) => {
+    updateWidthConfig: (id: string, percent: number) => set((state) => {
         const newWidthConfig = { ...state.widthConfig, [id]: percent };
-        
+
         const ray1 = newWidthConfig['ray1_boundary'] ?? 65.0;
         const ray5 = newWidthConfig['ray5_boundary'] ?? 25.0;
-        
+
         const newSettingsPartial = {
             medial_y_start: ray1 - 5.0,
             lateral_y_end: ray5 + 5.0,
@@ -280,9 +281,9 @@ export const useStore = create<State>((set, get) => ({
     setEnableLattice: (val) => set({ enableLattice: val }),
     setLatticeCellSize: (val) => set({ latticeCellSize: val }),
     setStrutRadius: (val) => set({ strutRadius: val }),
-    
+
     setActiveFootSide: (side) => set({ activeFootSide: side }),
-    
+
     updateArchSettings: (side, settings) => set((state) => {
         if (side === 'right') {
             return { archSettingsRight: { ...state.archSettingsRight, ...settings } };

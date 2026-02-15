@@ -7,7 +7,7 @@ import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 // Helper to get bounding box of outline
-function getBounds(points: {x: number, y: number}[]) {
+function getBounds(points: { x: number, y: number }[]) {
     if (points.length === 0) return { minX: 0, maxX: 100, minY: 0, maxY: 100, width: 100, height: 100 };
     const xs = points.map(p => p.x);
     const ys = points.map(p => p.y);
@@ -19,7 +19,7 @@ function getBounds(points: {x: number, y: number}[]) {
 }
 
 // Helper to get Y intersection bounds of polygon at X
-function getOutlineYAtX(points: {x: number, y: number}[], targetX: number) {
+function getOutlineYAtX(points: { x: number, y: number }[], targetX: number) {
     let intersections: number[] = [];
     for (let i = 0; i < points.length; i++) {
         const p1 = points[i];
@@ -56,7 +56,7 @@ const LANDMARK_DEFS: Record<string, { label: string, side: 'medial' | 'lateral' 
 };
 
 export default function LandmarkEditorCanvas() {
-    const { 
+    const {
         outlineImage,
         outlineImageTransform,
         outlineImageSize,
@@ -71,7 +71,7 @@ export default function LandmarkEditorCanvas() {
 
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    
+
     // Viewport State
     const [transform, setTransform] = useState({ x: 50, y: 50, k: 1 });
     const [isPanning, setIsPanning] = useState(false);
@@ -86,15 +86,15 @@ export default function LandmarkEditorCanvas() {
         if (!containerRef.current || outlinePoints.length === 0) return;
         const containerWidth = containerRef.current.clientWidth;
         const containerHeight = containerRef.current.clientHeight;
-        const padding = 80; 
+        const padding = 80;
         const contentWidth = bounds.width;
         const contentHeight = bounds.height;
         if (contentWidth === 0 || contentHeight === 0) return;
-        
+
         const k = Math.min((containerWidth - padding * 2) / contentWidth, (containerHeight - padding * 2) / contentHeight);
         const x = (containerWidth - contentWidth * k) / 2 - bounds.minX * k;
         const y = (containerHeight - contentHeight * k) / 2 - bounds.minY * k;
-        
+
         setTransform({ x, y, k });
     };
 
@@ -169,11 +169,13 @@ export default function LandmarkEditorCanvas() {
     const getGuidelineY = (id: string) => {
         if (!refPoints || !refPoints.heel || !refPoints.max) return (x: number) => 0;
         const percent = widthConfig[id] ?? (id === 'ray5_boundary' ? 25 : 65);
-        if (!refPoints.heel || !refPoints.max) return (x: number) => 0;
-        const heelY = refPoints.heel.max - (refPoints.heel.max - refPoints.heel.min) * (percent / 100);
-        const maxY = refPoints.max.max - (refPoints.max.max - refPoints.max.min) * (percent / 100);
-        const slope = (maxY - heelY) / (refPoints.max.x - refPoints.heel.x);
-        const intercept = heelY - slope * refPoints.heel.x;
+        const heel = refPoints.heel;
+        const max = refPoints.max;
+        if (heel.max === undefined || heel.min === undefined || max.max === undefined || max.min === undefined) return (x: number) => 0;
+        const heelY = heel.max - (heel.max - heel.min) * (percent / 100);
+        const maxY = max.max - (max.max - max.min) * (percent / 100);
+        const slope = (maxY - heelY) / (max.x - heel.x);
+        const intercept = heelY - slope * heel.x;
         return (x: number) => slope * x + intercept;
     };
 
@@ -184,9 +186,9 @@ export default function LandmarkEditorCanvas() {
         <div ref={containerRef} className="relative w-full h-full bg-background overflow-hidden flex flex-col border border-border/50 rounded-lg font-sans">
             {/* Toolbar */}
             <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 bg-card/80 backdrop-blur-md p-2 rounded-xl border border-white/10">
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k * 1.2}))}><ZoomIn className="h-4 w-4"/></Button>
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k / 1.2}))}><ZoomOut className="h-4 w-4"/></Button>
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={fitView}><Maximize className="h-4 w-4"/></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({ ...t, k: t.k * 1.2 }))}><ZoomIn className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({ ...t, k: t.k / 1.2 }))}><ZoomOut className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={fitView}><Maximize className="h-4 w-4" /></Button>
             </div>
 
             <div className="flex-1 relative cursor-default" onMouseDown={handlePanStart} onWheel={handleWheel}>
@@ -194,37 +196,37 @@ export default function LandmarkEditorCanvas() {
                     <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
                         {/* Grid */}
                         <defs>
-                            <pattern id="grid-lm" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="#ffffff" strokeWidth="0.2" opacity="0.1"/></pattern>
+                            <pattern id="grid-lm" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="#ffffff" strokeWidth="0.2" opacity="0.1" /></pattern>
                             <pattern id="grid-large-lm" width="50" height="50" patternUnits="userSpaceOnUse">
                                 <rect width="50" height="50" fill="url(#grid-lm)" />
-                                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#14b8a6" strokeWidth="0.5" opacity="0.2"/>
+                                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#14b8a6" strokeWidth="0.5" opacity="0.2" />
                             </pattern>
                         </defs>
                         <rect x={-1000} y={-1000} width={3000} height={3000} fill="url(#grid-large-lm)" />
 
                         {/* Ruler Labels */}
-                        {Array.from({ length: 15 }).map((_, i) => { 
-                            const val = i * 50; 
-                            return <g key={`x-${val}`}><text x={val + 2} y={10} fontSize="5" fontWeight="bold" fill="#ffffff" opacity="0.4" className="font-sans">{val}</text><line x1={val} y1={-100} x2={val} y2={500} stroke="#14b8a6" strokeWidth="0.3" strokeDasharray="2 2" opacity="0.2" /></g> 
+                        {Array.from({ length: 15 }).map((_, i) => {
+                            const val = i * 50;
+                            return <g key={`x-${val}`}><text x={val + 2} y={10} fontSize="5" fontWeight="bold" fill="#ffffff" opacity="0.4" className="font-sans">{val}</text><line x1={val} y1={-100} x2={val} y2={500} stroke="#14b8a6" strokeWidth="0.3" strokeDasharray="2 2" opacity="0.2" /></g>
                         })}
 
                         {/* Direction Labels */}
                         <g pointerEvents="none" className="select-none font-sans font-black text-white/30 uppercase tracking-widest">
-                            <text x={bounds.maxX + 40} y={(bounds.minY + bounds.maxY)/2} textAnchor="start" fontSize="6">Toe →</text>
-                            <text x={bounds.minX - 40} y={(bounds.minY + bounds.maxY)/2} textAnchor="end" fontSize="6">← Heel</text>
-                            <text x={(bounds.minX + bounds.maxX)/2} y={bounds.minY - 40} textAnchor="middle" fontSize="6">Medial (Inside)</text>
-                            <text x={(bounds.minX + bounds.maxX)/2} y={bounds.maxY + 40} textAnchor="middle" fontSize="6">Lateral (Outside)</text>
+                            <text x={bounds.maxX + 40} y={(bounds.minY + bounds.maxY) / 2} textAnchor="start" fontSize="6">Toe →</text>
+                            <text x={bounds.minX - 40} y={(bounds.minY + bounds.maxY) / 2} textAnchor="end" fontSize="6">← Heel</text>
+                            <text x={(bounds.minX + bounds.maxX) / 2} y={bounds.minY - 40} textAnchor="middle" fontSize="6">Medial (Inside)</text>
+                            <text x={(bounds.minX + bounds.maxX) / 2} y={bounds.maxY + 40} textAnchor="middle" fontSize="6">Lateral (Outside)</text>
                         </g>
 
                         {/* Background Image (Read-only) */}
                         {outlineImage && (
                             <g transform={`translate(${outlineImageTransform.x}, ${outlineImageTransform.y}) scale(${outlineImageTransform.scale}) rotate(${outlineImageTransform.rotation})`}>
                                 <g style={{ transformOrigin: 'center', transformBox: 'fill-box', transform: `scale(${outlineImageTransform.flipX ? -1 : 1}, ${outlineImageTransform.flipY ? -1 : 1})` }}>
-                                    <image 
-                                        href={outlineImage} 
-                                        x={0} y={0} 
+                                    <image
+                                        href={outlineImage}
+                                        x={0} y={0}
                                         width={outlineImageSize.width} height={outlineImageSize.height}
-                                        opacity={outlineImageTransform.opacity * 0.3} 
+                                        opacity={outlineImageTransform.opacity * 0.3}
                                     />
                                 </g>
                             </g>
@@ -238,8 +240,8 @@ export default function LandmarkEditorCanvas() {
                             const func = getGuidelineY(id);
                             const yStart = func(bounds.minX - 50), yEnd = func(bounds.maxX + 50);
                             const isDragging = draggingId === id;
-                            const color = id === 'ray5_boundary' ? COLORS.ray5 : COLORS.ray1; 
-                            
+                            const color = id === 'ray5_boundary' ? COLORS.ray5 : COLORS.ray1;
+
                             // Label position near Heel (X ~ 10)
                             const labelX = bounds.minX + 10;
                             const labelY = func(labelX);
@@ -252,16 +254,16 @@ export default function LandmarkEditorCanvas() {
                                     <g transform={`translate(${labelX}, ${labelY})`}>
                                         {(() => {
                                             const text = `${id === 'ray5_boundary' ? 'Ray5' : 'Ray1'} (${percent.toFixed(0)}%)`;
-                                            const width = text.length * 3 + 6; 
+                                            const width = text.length * 3 + 6;
                                             return (
                                                 <>
-                                                    <rect 
-                                                        x={-width/2} y="-5" width={width} height="10" rx="4" 
-                                                        fill="#0f172a" stroke={color} strokeWidth={1 / transform.k} 
+                                                    <rect
+                                                        x={-width / 2} y="-5" width={width} height="10" rx="4"
+                                                        fill="#0f172a" stroke={color} strokeWidth={1 / transform.k}
                                                     />
-                                                    <text 
-                                                        y="1.5" 
-                                                        fontSize="4" fill="white" fontWeight="bold" 
+                                                    <text
+                                                        y="1.5"
+                                                        fontSize="4" fill="white" fontWeight="bold"
                                                         textAnchor="middle" className="select-none font-sans"
                                                     >
                                                         {text}
@@ -280,7 +282,7 @@ export default function LandmarkEditorCanvas() {
                             const xPos = bounds.minX + (bounds.width * percent / 100);
                             const isActive = activeLandmarkId === id, isDragging = draggingId === id;
                             const displayColor = (isActive || isDragging) ? COLORS.active : COLORS.landmark_base;
-                            
+
                             let yS = bounds.minY, yE = bounds.maxY;
                             if (def.side === 'medial') yE = ray5Func(xPos); else if (def.side === 'lateral') yS = ray5Func(xPos);
 
@@ -290,32 +292,32 @@ export default function LandmarkEditorCanvas() {
                             return (
                                 <g key={id} className="cursor-ew-resize" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setActiveLandmarkId(id); setDraggingId(id); setDraggingType('landmark'); }}>
                                     <line x1={xPos} x2={xPos} y1={yS} y2={yE} stroke="transparent" strokeWidth="15" />
-                                    <line 
-                                        x1={xPos} x2={xPos} y1={yS} y2={yE} 
-                                        stroke={displayColor} 
-                                        strokeWidth={(isActive || isDragging ? 2.5 : 2) / transform.k} 
+                                    <line
+                                        x1={xPos} x2={xPos} y1={yS} y2={yE}
+                                        stroke={displayColor}
+                                        strokeWidth={(isActive || isDragging ? 2.5 : 2) / transform.k}
                                         strokeDasharray="4 2"
                                         opacity={isActive || isDragging ? 1 : 0.6}
                                     />
-                                    
+
                                     {/* Pill Label */}
                                     <g transform={`translate(${xPos}, ${labelY})`}>
                                         {(() => {
-                                            const width = def.label.length * 5 + 6; 
+                                            const width = def.label.length * 5 + 6;
                                             return (
                                                 <>
-                                                    <rect 
-                                                        x={-width/2} y="-6" width={width} height="12" rx="4" 
-                                                        fill={isActive || isDragging ? "#14b8a6" : "#0f172a"} 
-                                                        stroke={displayColor} strokeWidth={1 / transform.k} 
+                                                    <rect
+                                                        x={-width / 2} y="-6" width={width} height="12" rx="4"
+                                                        fill={isActive || isDragging ? "#14b8a6" : "#0f172a"}
+                                                        stroke={displayColor} strokeWidth={1 / transform.k}
                                                         className="transition-colors"
                                                     />
-                                                    <text 
+                                                    <text
                                                         y="2"
-                                                        textAnchor="middle" 
-                                                        fontSize="4.5" 
-                                                        fill={isActive || isDragging ? "#0f172a" : "white"} 
-                                                        fontWeight="bold" 
+                                                        textAnchor="middle"
+                                                        fontSize="4.5"
+                                                        fill={isActive || isDragging ? "#0f172a" : "white"}
+                                                        fontWeight="bold"
                                                         className="select-none font-sans"
                                                     >
                                                         {def.label}
@@ -324,13 +326,13 @@ export default function LandmarkEditorCanvas() {
                                             );
                                         })()}
                                     </g>
-                                    
+
                                     {(isActive || isDragging) && (
-                                        <text 
-                                            x={xPos} 
-                                            y={def.side === 'lateral' ? labelY + 15 : labelY - 15} 
-                                            textAnchor="middle" 
-                                            fontSize="4" 
+                                        <text
+                                            x={xPos}
+                                            y={def.side === 'lateral' ? labelY + 15 : labelY - 15}
+                                            textAnchor="middle"
+                                            fontSize="4"
                                             fontWeight="bold"
                                             fill="#14b8a6"
                                             className="font-sans"
@@ -346,9 +348,9 @@ export default function LandmarkEditorCanvas() {
             </div>
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-card/80 backdrop-blur-md px-6 py-3 rounded-2xl text-[10px] text-white/70 font-bold pointer-events-none border border-white/10">
                 <div className="flex items-center gap-6">
-                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary"/> ラインをドラッグして調整</span>
-                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary/40"/> ホイール: 拡大縮小</span>
-                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary/40"/> 背景ドラッグ: 視点移動</span>
+                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary" /> ラインをドラッグして調整</span>
+                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary/40" /> ホイール: 拡大縮小</span>
+                    <span className="flex items-center gap-2 uppercase tracking-widest"><span className="w-2 h-2 rounded-full bg-primary/40" /> 背景ドラッグ: 視点移動</span>
                 </div>
             </div>
         </div>
