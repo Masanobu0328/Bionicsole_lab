@@ -52,7 +52,7 @@ export type InsoleParams = {
     enable_lattice: boolean;
     lattice_cell_size: number;
     strut_radius: number;
-    
+
     // New fields for custom design
     outline_points?: { x: number; y: number }[];
     landmark_config?: Record<string, number>;
@@ -94,12 +94,17 @@ export async function getPatients(): Promise<Patient[]> {
         if (!response.ok) {
             throw new Error('Failed to fetch patients');
         }
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Response is not JSON');
+        }
         return response.json();
     } catch (error) {
-        console.warn('Backend API not reachable, using mock data:', error);
+        console.warn('Backend API not reachable, using demo data:', error);
         return [
-            { id: '0001', name: 'Demo Patient 0001' },
-            { id: '0002', name: 'Demo Patient 0002' },
+            { id: '0001', name: 'テスト①' },
+            { id: '0002', name: 'テスト②' },
+            { id: '0003', name: 'テスト③' },
         ];
     }
 }

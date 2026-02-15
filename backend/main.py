@@ -18,6 +18,7 @@ app = FastAPI(title="MasaCAD API", version="1.0.0")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://frontend-smoky-one-57.vercel.app",
 ]
 
 app.add_middleware(
