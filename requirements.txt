@@ -12,3 +12,5 @@ scipy>=1.10.0
 pandas>=2.0.0
 shapely>=2.0.0
 manifold3d>=3.0.0
+matplotlib>=3.7.0
+scikit-image>=0.21.0
