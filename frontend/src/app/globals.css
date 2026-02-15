@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  /* Bionic Sole Theme (Dark First) */
+  --background: 218 33% 15%; /* #1A2B3D Deep Navy */
+  --foreground: 0 0% 100%; /* #FFFFFF White */
+  --card: 216 38% 19%; /* #1E2D42 Surface */
+  --card-foreground: 210 40% 98%; /* #F8FAFC */
+  --popover: 216 38% 19%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 173 80% 40%; /* #14B8A6 Turquoise */
+  --primary-foreground: 222 47% 11%; /* #0F172A */
+  --secondary: 217 33% 25%; /* #2D3A4F */
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 33% 25%;
+  --muted-foreground: 215 20% 65%; /* #94A3B8 */
+  --accent: 173 80% 40%;
+  --accent-foreground: 173 80% 40%;
+  --destructive: 0 62% 30%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217 33% 25%;
+  --input: 217 33% 25%;
+  --ring: 173 80% 40%;
+  --radius: 0.5rem;
+  
+  /* Custom Gradient Variable */
+  --primary-gradient: linear-gradient(90deg, #0E7490 0%, #14B8A6 50%, #2DD4BF 100%);
+}
+
+.dark {
+  --background: 218 33% 15%;
+  --foreground: 0 0% 100%;
+  --card: 216 38% 19%;
+  --card-foreground: 210 40% 98%;
+  --popover: 216 38% 19%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 173 80% 40%;
+  --primary-foreground: 222 47% 11%;
+  --secondary: 217 33% 25%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 33% 25%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 217 33% 25%;
+  --accent-foreground: 173 80% 40%;
+  --destructive: 0 62% 30%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217 33% 25%;
+  --input: 217 33% 25%;
+  --ring: 173 80% 40%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* Custom utility classes mapped to CSS variables */
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  
+  /* Custom Image variable for gradient */
+  --image-primary-gradient: var(--primary-gradient);
+}

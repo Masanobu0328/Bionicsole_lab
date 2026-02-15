@@ -1,0 +1,43 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Temporary files
+*.tmp
+.tmp*/
+
+# Debug files
+*.log
+debug_*.py
+debug_*.txt
+debug_*.log
+densify_debug.log
+files_in_commit.txt
+
+# Node
+node_modules/
+
+# Next.js
+.next/
+
+# Screenshots
+*.png
+
+# Exports (STL files)
+exports/*.stl

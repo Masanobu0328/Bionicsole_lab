@@ -1,0 +1,27 @@
+{
+  "foot": { "length": 260, "width": 95 },
+  "arch": {
+    "talus": 2,
+    "navicular": 4,
+    "cuneiform": 3,
+    "met1": 2,
+    "cuboid": 6,
+    "met5": 3,
+    "sustentaculum": 2
+  },
+  "arch_position_cm": {
+    "medial": {
+      "start_cm": 5,
+      "peak_cm": 11.7,
+      "end_cm": 20.1
+    },
+    "lateral": {
+      "start_cm": 7.3,
+      "peak_cm": 13.0,
+      "end_cm": 18.0
+    }
+  },
+  "heel_cup": 3.0,
+  "base_thickness": 5.0,
+  "min_thickness": 1.8
+}
