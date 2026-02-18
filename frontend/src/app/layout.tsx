@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "MasaCAD v5.0 | Insole Design System",
+  title: "Bionic Sole Lab | Insole Design System",
   description: "Professional insole design and generation system",
 };
 
