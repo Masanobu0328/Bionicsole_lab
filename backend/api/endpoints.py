@@ -73,6 +73,11 @@ class ArchSettings(BaseModel):
     
     # Detailed grid settings
     grid_cell_heights: Optional[Dict[str, float]] = None
+    # Per-landmark Z height control (詳細設定)
+    medial_detail_enabled: bool = False
+    medial_detail_heights: List[float] = []  # [subtalar, navicular, cuneiform, m5] in mm
+    transverse_detail_enabled: bool = False
+    transverse_detail_heights: List[float] = []  # [nav, cun, mt, met] in mm
 
 class CurvePoint(BaseModel):
     x: float

@@ -86,8 +86,18 @@ DEFAULT_BONE_LANDMARKS: Dict[str, BoneLandmark] = {
         name_en='Medial Cuneiform Level',
         x_percent=55.0,
         color='#45B7D1',  # スカイブルー
-        description_ja='内側楔状骨の位置。内側縦アーチ終了、中足骨への移行部',
-        description_en='Medial cuneiform position. End of medial arch, transition to metatarsals',
+        description_ja='内側楔状骨の位置。中足骨への移行部',
+        description_en='Medial cuneiform position. Transition to metatarsals',
+        side='medial'  # 内側のみ
+    ),
+    'metatarsal_base_1': BoneLandmark(
+        id='metatarsal_base_1',
+        name_ja='第1中足骨基部',
+        name_en='1st Metatarsal Base (MB1)',
+        x_percent=62.0,
+        color='#F59E0B',  # アンバー
+        description_ja='第1中足骨基部（Lisfranc関節内側）。内側縦アーチの終端',
+        description_en='Base of 1st metatarsal (medial Lisfranc joint). End of medial longitudinal arch',
         side='medial'  # 内側のみ
     ),
     'metatarsal': BoneLandmark(

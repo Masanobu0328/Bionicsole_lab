@@ -129,6 +129,7 @@ export default function PreviewStep() {
 
                         // Use URLs from backend response if available
                         if (status.result) {
+                            const cacheBuster = `?t=${Date.now()}`;
                             const glbUrl = resolveApiUrl(status.result.download_url);
                             const stlUrl = status.result.stl_url
                                 ? resolveApiUrl(status.result.stl_url)
@@ -137,16 +138,17 @@ export default function PreviewStep() {
                                 download: glbUrl,
                                 stl: stlUrl
                             });
-                            setCurrentModelUrl(glbUrl);
+                            setCurrentModelUrl(glbUrl + cacheBuster);
                         } else {
                             // Fallback to constructed URLs
+                            const cacheBuster = `?t=${Date.now()}`;
                             const glbUrl = getDownloadUrl(`generated_${patientId}_${side}.glb`);
                             const stlUrl = getDownloadUrl(`generated_${patientId}_${side}.stl`);
                             setResultUrls({
                                 download: glbUrl,
                                 stl: stlUrl
                             });
-                            setCurrentModelUrl(glbUrl);
+                            setCurrentModelUrl(glbUrl + cacheBuster);
                         }
                     } else if (status.status === 'failed') {
                         if (pollingInterval.current) {

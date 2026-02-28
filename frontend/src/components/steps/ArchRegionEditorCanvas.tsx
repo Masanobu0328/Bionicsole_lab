@@ -33,19 +33,20 @@ const LM_LABELS: Record<string, string> = {
     'navicular': '舟状',
     'cuboid': '立方',
     'medial_cuneiform': '楔状',
-    'metatarsal': '中足'
+    'metatarsal_base_1': 'MB1',
+    'metatarsal': 'M7'
 };
 
 // Control point labels per curve type
 const CP_LABELS: Record<string, string[]> = {
-    medial: ['M0:Start', 'M1', 'M2:Sub', 'M3:Nav', 'M4:Cun', 'M5', 'M6', 'M7:Meta'],
-    medialFlat: ['mF0', 'mF1', 'mF2', 'mF3', 'mF4', 'mF5', 'mF6', 'mF7'],
+    medial: ['M0:Start', 'M1', 'M2:Sub', 'M3:Nav', 'M4:Cun', 'M5', 'MB1:End'],
+    medialFlat: ['mF0', 'mF1', 'mF2', 'mF3', 'mF4', 'mF5'],
     lateral: ['L0:Start', 'L1', 'L2:Peak', 'L3', 'L4:End'],
     lateralFlat: ['lF0', 'lF1', 'lF2', 'lF3', 'lF4'],
     transverse: ['T0:Ray1', 'T1:Ray1', 'T2:Meta', 'T3:Ray5', 'T4:Ray5', 'T5', 'T6:Mid', 'T7'],
     heelBridge: ['M0:Start', 'H1:Ray1', 'H2:Ray5', 'L0:Start'],
     lateralBridge: ['L4:End', 'B1:Cub', 'T4:Ray5'],
-    metatarsalBridge: ['T2:Meta', 'MB1', 'M7:Meta'],
+    metatarsalBridge: ['T2:Meta', 'MB1:End', 'M7:Meta'],
 };
 
 export default function ArchRegionEditorCanvas() {
@@ -75,24 +76,32 @@ export default function ArchRegionEditorCanvas() {
 
     const bounds = useMemo(() => getBounds(outlinePoints), [outlinePoints]);
 
-    // Sync transverse polygon X-range to archSettings (transverse_start/peak/end)
-    const syncTransverseToArchSettings = React.useCallback((points: CurvePoint[]) => {
-        if (!points || points.length < 2 || bounds.width <= 0) return;
-        const xs = points.map(p => p.x);
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const centroidX = xs.reduce((s, v) => s + v, 0) / xs.length;
+    // Sync arch curve positions to archSettings (medial_end + transverse_start/peak/end)
+    const syncArchSettings = React.useCallback((curves: { medial?: CurvePoint[], transverse?: CurvePoint[] }) => {
+        if (bounds.width <= 0) return;
+        const updates: Record<string, number> = {};
 
-        const transverse_start = ((minX - bounds.minX) / bounds.width) * 100;
-        const transverse_end = ((maxX - bounds.minX) / bounds.width) * 100;
-        const transverse_peak = ((centroidX - bounds.minX) / bounds.width) * 100;
-
-        updateArchSettings(activeFootSide, {
-            transverse_start: Math.max(0, Math.min(100, transverse_start)),
-            transverse_peak: Math.max(0, Math.min(100, transverse_peak)),
-            transverse_end: Math.max(0, Math.min(100, transverse_end)),
-        });
+        if (curves.transverse && curves.transverse.length >= 2) {
+            const xs = curves.transverse.map(p => p.x);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const centroidX = xs.reduce((s, v) => s + v, 0) / xs.length;
+            updates.transverse_start = Math.max(0, Math.min(100, ((minX - bounds.minX) / bounds.width) * 100));
+            updates.transverse_peak  = Math.max(0, Math.min(100, ((centroidX - bounds.minX) / bounds.width) * 100));
+            updates.transverse_end   = Math.max(0, Math.min(100, ((maxX - bounds.minX) / bounds.width) * 100));
+        }
+        if (curves.medial && curves.medial.length > 0) {
+            const lastPt = curves.medial[curves.medial.length - 1];
+            updates.medial_end = Math.max(0, Math.min(100, ((lastPt.x - bounds.minX) / bounds.width) * 100));
+        }
+        if (Object.keys(updates).length > 0) updateArchSettings(activeFootSide, updates);
     }, [bounds, updateArchSettings, activeFootSide]);
+
+    // Convenience wrappers (same reference count in deps)
+    const syncTransverseToArchSettings = React.useCallback(
+        (points: CurvePoint[]) => syncArchSettings({ transverse: points }),
+        [syncArchSettings]
+    );
 
     // Helper to generate Flat curves (moved outside to fix ReferenceError)
     const createFlatCurve = React.useCallback((sourcePoints: CurvePoint[], direction: 1 | -1, isClosed = false) => {
@@ -156,6 +165,63 @@ export default function ArchRegionEditorCanvas() {
         });
     }, [outlinePoints]);
 
+    // Custom 6-point medialFlat: mF0=arch_start, mF1=subtalar, mF2=navicular, mF3=cuneiform, mF4=M5対応(X follows M5), mF5=midpoint of M7→MB1 segment
+    const generateMedialFlatCustom = React.useCallback((medialPoints?: CurvePoint[]): CurvePoint[] => {
+        const r1Pct = widthConfig['ray1_boundary'] ?? 65;
+        const cuneiformPct = landmarkConfig['medial_cuneiform'] ?? 55;
+        const metatarsalPct = landmarkConfig['metatarsal'] ?? 70;
+        const mb1Pct = metatarsalPct + 1;
+        const midCunMB1 = (cuneiformPct + mb1Pct) / 2; // M5 default X%
+
+        // mF4 X: follows M5's actual X (index 5 in 7-point medial arch), else default
+        const mf4X = (medialPoints && medialPoints.length >= 6)
+            ? medialPoints[5].x
+            : bounds.minX + bounds.width * (midCunMB1 / 100);
+
+        // Compute actual M7 and MB1 world coordinates for mF5
+        const m7X = bounds.minX + bounds.width * (metatarsalPct / 100);
+        const mb1X = bounds.minX + bounds.width * (mb1Pct / 100);
+        const m7YBounds = getOutlineYAtX(outlinePoints, m7X);
+        const mb1YBounds = getOutlineYAtX(outlinePoints, mb1X);
+        const m7Y = m7YBounds ? m7YBounds.min : 0;
+        const mb1Y = mb1YBounds
+            ? mb1YBounds.min + (mb1YBounds.max - mb1YBounds.min) * (1 - (r1Pct + 3) / 100)
+            : 0;
+
+        // mF5 = midpoint (t=0.5) of M7→MB1 segment
+        const mf5: CurvePoint = { x: (m7X + mb1X) / 2, y: (m7Y + mb1Y) / 2 };
+
+        const basePercents = [
+            landmarkConfig['arch_start'] ?? 15,   // mF0
+            landmarkConfig['subtalar'] ?? 30,       // mF1
+            landmarkConfig['navicular'] ?? 43,      // mF2
+            cuneiformPct,                           // mF3
+        ];
+        const pts = basePercents.map((pct, i) => {
+            const x = bounds.minX + bounds.width * (pct / 100);
+            const yBounds = getOutlineYAtX(outlinePoints, x);
+            if (!yBounds) return { x, y: 0 };
+            const outlineY = yBounds.min;
+            const ray1Y = yBounds.min + (yBounds.max - yBounds.min) * (1 - r1Pct / 100);
+            if (i === 0) return { x, y: outlineY };                        // mF0: at outline (arch start)
+            return { x, y: outlineY + (ray1Y - outlineY) * 0.6 };         // mF1-mF3: flat plateau ~60% toward ray1
+        });
+
+        // mF4: X follows M5's actual position, Y = linear interpolation on mF3→mF5 line
+        const mf3 = pts[3];
+        let mf4Y: number;
+        if (mf5.x > mf3.x) {
+            const t = Math.max(0, Math.min(1, (mf4X - mf3.x) / (mf5.x - mf3.x)));
+            mf4Y = mf3.y + t * (mf5.y - mf3.y);
+        } else {
+            mf4Y = mf3.y;
+        }
+        pts.push({ x: mf4X, y: mf4Y });
+
+        pts.push(mf5); // mF5: midpoint of M7→MB1 segment
+        return pts;
+    }, [bounds, widthConfig, landmarkConfig, outlinePoints]);
+
     // --- Initialization ---
     useEffect(() => {
         if (outlinePoints.length > 0) {
@@ -167,12 +233,12 @@ export default function ArchRegionEditorCanvas() {
             let lateralFlatPoints = archCurves?.lateralFlat;
             let transverseFlatPoints = archCurves?.transverseFlat;
             // Check if regeneration is needed
-            const needsRegenMedial = !medialFlatPoints || medialFlatPoints.length === 0 || Math.abs(medialFlatPoints[0].x - medialPoints[0].x) < 0.1;
+            const needsRegenMedial = !medialFlatPoints || medialFlatPoints.length !== 6;
             const needsRegenLateral = !lateralFlatPoints || lateralFlatPoints.length === 0 || Math.abs(lateralFlatPoints[0].x - lateralPoints[0].x) < 0.1;
             const needsRegenTransverse = !transverseFlatPoints || transverseFlatPoints.length === 0;
 
             if (needsRegenMedial) {
-                medialFlatPoints = createFlatCurve(medialPoints, -1);
+                medialFlatPoints = generateMedialFlatCustom(medialPoints);
             }
             if (needsRegenLateral) {
                 lateralFlatPoints = createFlatCurve(lateralPoints, 1);
@@ -212,11 +278,11 @@ export default function ArchRegionEditorCanvas() {
                     metatarsalBridge: metatarsalBridgePoints,
                 };
                 setArchCurves(initialCurves);
-                // Sync transverse polygon X-range to archSettings on initial generation
-                syncTransverseToArchSettings(transversePoints);
+                // Sync arch settings on initial generation
+                syncArchSettings({ transverse: transversePoints, medial: medialPoints });
             }
         }
-    }, [outlinePoints, widthConfig, landmarkConfig, createFlatCurve, syncTransverseToArchSettings]);
+    }, [outlinePoints, widthConfig, landmarkConfig, createFlatCurve, syncArchSettings]);
 
     const generateInitialCurve = (type: 'medial' | 'lateral' | 'transverse' | 'heelBridge' | 'lateralBridge' | 'metatarsalBridge', refCurves?: { medial?: CurvePoint[], lateral?: CurvePoint[], transverse?: CurvePoint[] }): CurvePoint[] => {
         if (type === 'heelBridge') {
@@ -278,30 +344,19 @@ export default function ArchRegionEditorCanvas() {
         }
 
         if (type === 'metatarsalBridge') {
-            // Bridge from transverse[2] (T2) to medial[7] (M7)
-            // Control point follows T3→T2 direction for smooth curve
+            // Bridge: T2 → MB1(medial arch end) → M7(standalone outline point)
             const medialPts = refCurves?.medial;
             const transversePts = refCurves?.transverse;
-            if (!medialPts || !transversePts || medialPts.length < 8 || transversePts.length < 4) return [];
+            if (!medialPts || !transversePts || medialPts.length < 7 || transversePts.length < 4) return [];
 
-            const t3 = transversePts[3]; // T3 (used for direction)
-            const p0 = transversePts[2]; // T2
-            const p2 = medialPts[7];     // M7
+            const p0 = transversePts[2]; // T2 (start, fixed)
+            const p1 = medialPts[medialPts.length - 1]; // MB1 = medial arch end
 
-            // Direction vector from T3 to T2
-            const dirX = p0.x - t3.x;
-            const dirY = p0.y - t3.y;
-            const dist = Math.sqrt(dirX * dirX + dirY * dirY);
-            const extensionLen = dist * 0.6;
-
-            // Control point: X = metatarsal + 1%, Y from T3→T2 direction blended toward M7
+            // M7: standalone outline point at metatarsal landmark (70%)
             const metatarsalPct = landmarkConfig['metatarsal'] ?? 70;
-            const mb1X = bounds.minX + bounds.width * (metatarsalPct / 100) + bounds.width * 0.01;
-            const extY = p0.y + (dirY / dist) * extensionLen;
-            const p1 = {
-                x: mb1X,
-                y: extY * 0.5 + p2.y * 0.5
-            };
+            const m7X = bounds.minX + bounds.width * (metatarsalPct / 100);
+            const m7YBounds = getOutlineYAtX(outlinePoints, m7X);
+            const p2 = { x: m7X, y: m7YBounds ? m7YBounds.min : p1.y }; // M7 (end, fixed)
 
             return [p0, p1, p2];
         }
@@ -380,10 +435,10 @@ export default function ArchRegionEditorCanvas() {
         }
 
         const points: CurvePoint[] = [];
-        const numPoints = type === 'medial' ? 8 : 5;
+        const numPoints = type === 'medial' ? 7 : 5;
 
         let startPercent = type === 'medial' ? (landmarkConfig['arch_start'] ?? 15) : (landmarkConfig['lateral_arch_start'] ?? 20);
-        let endPercent = type === 'medial' ? (landmarkConfig['metatarsal'] ?? 70) : (landmarkConfig['cuboid'] ?? 45);
+        let endPercent = type === 'medial' ? (landmarkConfig['metatarsal'] ?? 70) + 1 : (landmarkConfig['cuboid'] ?? 45);
 
         const startX = bounds.minX + bounds.width * (startPercent / 100);
         const endX = bounds.minX + bounds.width * (endPercent / 100);
@@ -403,18 +458,19 @@ export default function ArchRegionEditorCanvas() {
         const navicularPct = landmarkConfig['navicular'] ?? 43;
         const cuneiformPct = landmarkConfig['medial_cuneiform'] ?? 55;
         const metatarsalPct = landmarkConfig['metatarsal'] ?? 70;
-        const midCunMeta = (cuneiformPct + metatarsalPct) / 2;
+        // MB1 = metatarsal level +1% (toe side) × ray1 boundary (Y)
+        const mb1Pct = metatarsalPct + 1;
+        const midCunMB1 = (cuneiformPct + mb1Pct) / 2;
 
-        // Medial X Points
+        // Medial X Points (M0→MB1, 7 points, M6 removed)
         const medialXPercents = [
             (landmarkConfig['arch_start'] ?? 15),
             ((landmarkConfig['arch_start'] ?? 15) + subtalarPct) / 2,
             subtalarPct,
             navicularPct,
             cuneiformPct,
-            midCunMeta,
-            (midCunMeta + metatarsalPct) / 2,
-            metatarsalPct
+            midCunMB1,
+            mb1Pct  // MB1: metatarsal level × ray1 intersection
         ];
 
         if (type === 'medial') {
@@ -440,12 +496,10 @@ export default function ArchRegionEditorCanvas() {
                         return { x, y: ray1Y + (ray5Y - ray1Y) * 0.10 };
                     case 4: // M4: Cuneiform - snap to Ray 1
                         return { x, y: ray1Y };
-                    case 5: // M5: Descent from cuneiform - 70% from outline to Ray1
-                        return { x, y: outlineY + (ray1Y - outlineY) * 0.70 };
-                    case 6: // M6: Further descent - 40% from outline to Ray1
-                        return { x, y: outlineY + (ray1Y - outlineY) * 0.40 };
-                    case 7: // M7: End (fixed)
-                        return { x, y: outlineY };
+                    case 5: // M5: On M4→MB1 line at midpoint (t=0.5 → 1.5% medial offset)
+                        return { x, y: ray1Y - (yBounds.max - yBounds.min) * 0.015 };
+                    case 6: // MB1: End - 3% medial offset from Ray 1
+                        return { x, y: ray1Y - (yBounds.max - yBounds.min) * 0.03 };
                     default:
                         return { x, y: outlineY };
                 }
@@ -534,7 +588,13 @@ export default function ArchRegionEditorCanvas() {
         if (isSolidArch || isBridge) {
             // @ts-ignore
             const len = archCurves[type]?.length || 0;
-            if (idx === 0 || idx === len - 1) return;
+            // medial: M0(start) fixed, MB1(end) draggable
+            // lateral/bridges: both endpoints fixed
+            if (type === 'medial') {
+                if (idx === 0) return;
+            } else {
+                if (idx === 0 || idx === len - 1) return;
+            }
         }
 
         setDraggingCurve(type);
@@ -598,12 +658,35 @@ export default function ArchRegionEditorCanvas() {
                     // Move single point
 
                     // Constrain Flat Endpoints to Outline
-                    if ((draggingCurve === 'medialFlat' || draggingCurve === 'lateralFlat') && (draggingPointIdx === 0 || draggingPointIdx === points.length - 1)) {
+                    // medialFlat mF0 (start): snap to outline
+                    // medialFlat mF5 (end): slides along M7→MB1 segment
+                    // lateralFlat: snap both endpoints to outline
+                    const isMedialFlatStart = draggingCurve === 'medialFlat' && draggingPointIdx === 0;
+                    const isMedialFlatEnd = draggingCurve === 'medialFlat' && draggingPointIdx === points.length - 1;
+                    const isLateralFlatEnd = draggingCurve === 'lateralFlat' && (draggingPointIdx === 0 || draggingPointIdx === points.length - 1);
+                    if (isMedialFlatStart) {
                         const yBounds = getOutlineYAtX(outlinePoints, pos.x);
-                        if (yBounds) {
-                            if (draggingCurve === 'medialFlat') pos.y = yBounds.min;
-                            if (draggingCurve === 'lateralFlat') pos.y = yBounds.max;
+                        if (yBounds) pos.y = yBounds.min;
+                    } else if (isMedialFlatEnd) {
+                        // mF4: slide along the M7→MB1 segment (metatarsalBridge[2] → metatarsalBridge[1])
+                        const bridge = newCurves.metatarsalBridge;
+                        if (bridge && bridge.length >= 3) {
+                            const m7  = bridge[2]; // M7
+                            const mb1 = bridge[1]; // MB1
+                            const dx = mb1.x - m7.x;
+                            const dy = mb1.y - m7.y;
+                            const lenSq = dx * dx + dy * dy;
+                            if (lenSq > 0) {
+                                const t = Math.max(0, Math.min(1,
+                                    ((pos.x - m7.x) * dx + (pos.y - m7.y) * dy) / lenSq
+                                ));
+                                pos.x = m7.x + t * dx;
+                                pos.y = m7.y + t * dy;
+                            }
                         }
+                    } else if (isLateralFlatEnd) {
+                        const yBounds = getOutlineYAtX(outlinePoints, pos.x);
+                        if (yBounds) pos.y = yBounds.max;
                     }
 
                     points[draggingPointIdx] = { x: pos.x, y: pos.y };
@@ -612,11 +695,11 @@ export default function ArchRegionEditorCanvas() {
 
                     // If dragging solid curve (medial/lateral/transverse), auto-update the corresponding flat curve
                     if (draggingCurve === 'medial') {
-                        newCurves.medialFlat = createFlatCurve(points, -1);
-                        // Sync metatarsalBridge endpoint to medial[7]
-                        if (newCurves.metatarsalBridge && newCurves.metatarsalBridge.length >= 3 && points.length >= 8) {
+                        newCurves.medialFlat = generateMedialFlatCustom(points);
+                        // Sync metatarsalBridge[1] (MB1) to medial arch end
+                        if (newCurves.metatarsalBridge && newCurves.metatarsalBridge.length >= 3 && points.length >= 7) {
                             const mbPoints = [...newCurves.metatarsalBridge];
-                            mbPoints[mbPoints.length - 1] = { ...points[7] };
+                            mbPoints[1] = { ...points[points.length - 1] }; // MB1 tracks medial arch end
                             newCurves.metatarsalBridge = mbPoints;
                         }
                     } else if (draggingCurve === 'lateral') {
@@ -649,9 +732,12 @@ export default function ArchRegionEditorCanvas() {
             }
         };
         const handleMouseUp = () => {
-            // Sync transverse polygon to archSettings when drag ends
-            if (draggingCurve === 'transverse' && archCurves?.transverse) {
-                syncTransverseToArchSettings(archCurves.transverse);
+            // Sync arch settings when drag ends
+            if (draggingCurve === 'transverse' || draggingCurve === 'medial') {
+                syncArchSettings({
+                    transverse: archCurves?.transverse,
+                    medial: archCurves?.medial,
+                });
             }
             setDraggingCurve(null);
             setDraggingPointIdx(null);
@@ -665,7 +751,7 @@ export default function ArchRegionEditorCanvas() {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [draggingCurve, draggingPointIdx, isDraggingWholeCurve, isPanning, lastPanPos, transform, archCurves, syncTransverseToArchSettings]);
+    }, [draggingCurve, draggingPointIdx, isDraggingWholeCurve, isPanning, lastPanPos, transform, archCurves, syncArchSettings]);
 
     // --- Rendering ---
     const outlineD = useMemo(() => getSmoothPath(outlinePoints, true), [outlinePoints]);
@@ -704,9 +790,12 @@ export default function ArchRegionEditorCanvas() {
 
                 {/* Control Points */}
                 {points.map((p, i) => {
-                    // Medial/Lateral (Solid) and Bridge endpoints are fixed
+                    // medial: M0 fixed, MB1(last) draggable
+                    // lateral/bridges: both endpoints fixed
                     const isSolidArch = type === 'medial' || type === 'lateral';
-                    const isFixed = (isSolidArch || isBridge) && (i === 0 || i === points.length - 1);
+                    const isFixed = type === 'medial'
+                        ? i === 0
+                        : (isSolidArch || isBridge) && (i === 0 || i === points.length - 1);
                     const isPointActive = draggingCurve === type && draggingPointIdx === i;
                     const labels = CP_LABELS[type];
                     const label = labels ? labels[i] : undefined;
@@ -769,13 +858,14 @@ export default function ArchRegionEditorCanvas() {
         if (!archCurves || outlinePoints.length === 0) return null;
         const medial = archCurves.medial;
         const lateral = archCurves.lateral;
-        if (!medial || medial.length < 8 || !lateral || lateral.length < 5) return null;
+        if (!medial || medial.length < 7 || !lateral || lateral.length < 5) return null;
 
         const numSteps = 30;
 
-        // M0→M7: sample outline min Y (medial edge)
+        // M0→M7: sample outline min Y (medial edge), M7 is standalone at metatarsal landmark
         const m0x = medial[0].x;
-        const m7x = medial[7].x;
+        const metatarsalPctEdge = landmarkConfig['metatarsal'] ?? 70;
+        const m7x = bounds.minX + bounds.width * (metatarsalPctEdge / 100);
         const medialEdge: CurvePoint[] = [];
         for (let i = 0; i <= numSteps; i++) {
             const x = m0x + (m7x - m0x) * (i / numSteps);
@@ -861,26 +951,23 @@ export default function ArchRegionEditorCanvas() {
 
                                 {archCurves.heelBridge && renderCurve(archCurves.heelBridge, COLORS.bridge_stroke, 'none', 'heelBridge')}
                                 {archCurves.lateralBridge && renderCurve(archCurves.lateralBridge, COLORS.bridge_stroke, 'none', 'lateralBridge')}
-                                {/* metatarsalBridge control points only (line is drawn in combined path above) */}
+                                {/* metatarsalBridge: render M7 (bridge[2]) as fixed reference point */}
                                 {archCurves.metatarsalBridge && archCurves.metatarsalBridge.length >= 3 && (() => {
                                     const mb = archCurves.metatarsalBridge;
                                     const labels = CP_LABELS['metatarsalBridge'];
-                                    // Only render the draggable middle point MB1
-                                    const p = mb[1];
-                                    const isActive = draggingCurve === 'metatarsalBridge' && draggingPointIdx === 1;
+                                    // M7 (bridge[2]): standalone arch pad outline point, fixed
+                                    const m7p = mb[2];
                                     return (
                                         <g>
                                             <circle
-                                                cx={p.x} cy={p.y}
-                                                r={isActive ? 6 / transform.k : 4 / transform.k}
-                                                fill={isActive ? COLORS.point_active : COLORS.point_base}
-                                                stroke={COLORS.bridge_stroke}
-                                                strokeWidth={2 / transform.k}
-                                                className="cursor-move hover:scale-125 transition-transform"
-                                                onMouseDown={(e) => handleMouseDownPoint(e, 'metatarsalBridge', 1)}
+                                                cx={m7p.x} cy={m7p.y}
+                                                r={3 / transform.k}
+                                                fill={COLORS.point_fixed}
+                                                stroke="none"
+                                                className="cursor-not-allowed"
                                             />
-                                            {showLabels && labels && labels[1] && (
-                                                <text x={p.x} y={p.y - 10 / transform.k} fontSize={11 / transform.k} fill={COLORS.bridge_stroke} textAnchor="middle" opacity={0.9} className="select-none pointer-events-none" fontWeight={600}>{labels[1]}</text>
+                                            {showLabels && labels && labels[2] && (
+                                                <text x={m7p.x} y={m7p.y - 10 / transform.k} fontSize={11 / transform.k} fill={COLORS.bridge_stroke} textAnchor="middle" opacity={0.9} className="select-none pointer-events-none" fontWeight={600}>{labels[2]}</text>
                                             )}
                                         </g>
                                     );

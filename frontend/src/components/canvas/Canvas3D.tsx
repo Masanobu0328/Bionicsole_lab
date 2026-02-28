@@ -117,7 +117,7 @@ function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: stri
         }
 
         console.log("Loading 3D Model from:", url);
-        const isGLB = url.toLowerCase().endsWith('.glb');
+        const isGLB = url.toLowerCase().split('?')[0].endsWith('.glb');
 
         const handleGeometry = (geo: THREE.BufferGeometry) => {
             // FIX: Do NOT use geo.center() as it centers Z axis too, breaking height map calculations.

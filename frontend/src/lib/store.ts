@@ -148,6 +148,10 @@ const DEFAULT_ARCH_SETTINGS: ArchSettings = {
     lateral_y_end: 25.0,
     transverse_y_start: 20.0,
     transverse_y_end: 70.0,
+    medial_detail_enabled: false,
+    medial_detail_heights: [0.0, 0.0, 0.0, 0.0],
+    transverse_detail_enabled: false,
+    transverse_detail_heights: [0.0, 0.0, 0.0, 0.0],
 };
 
 // Initialize grid cell heights from constants

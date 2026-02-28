@@ -144,11 +144,28 @@ def generate_arch_profile(arch_settings: dict = None, landmark_settings: dict = 
     
     key_points = sorted(key_points)
     profile = {}
-    
+
+    # 詳細設定スプライン（有効な場合はベルカーブを置き換え）
+    detail_spline = _build_detail_spline(settings, landmark_settings)
+    transverse_detail_spline = _build_transverse_detail_spline(settings, landmark_settings)
+
     for x in key_points:
-        medial_h = _calculate_arch_height(x, settings['medial_start'], settings['medial_peak'], settings['medial_end'], settings['medial_height'])
+        if detail_spline is not None:
+            if settings['medial_start'] <= x <= settings['medial_end']:
+                raw = float(detail_spline(x))
+                medial_h = max(0.0, raw)
+            else:
+                medial_h = 0.0
+        else:
+            medial_h = _calculate_arch_height(x, settings['medial_start'], settings['medial_peak'], settings['medial_end'], settings['medial_height'])
         lateral_h = _calculate_arch_height(x, settings['lateral_start'], settings['lateral_peak'], settings['lateral_end'], settings['lateral_height'])
-        transverse_h = _calculate_arch_height(x, settings['transverse_start'], settings['transverse_peak'], settings['transverse_end'], settings['transverse_height'])
+        if transverse_detail_spline is not None:
+            if settings['transverse_start'] <= x <= settings['transverse_end']:
+                transverse_h = max(0.0, float(transverse_detail_spline(x)))
+            else:
+                transverse_h = 0.0
+        else:
+            transverse_h = _calculate_arch_height(x, settings['transverse_start'], settings['transverse_peak'], settings['transverse_end'], settings['transverse_height'])
         
         if grid_heights:
             for cell in grid_definitions:
@@ -181,6 +198,76 @@ def _calculate_arch_height(x: float, start: float, peak: float, end: float, max_
         t = (x - peak) / (end - peak)
         t = t * t * (3 - 2 * t)
         return max_height * (1 - t)
+
+
+def _build_detail_spline(settings: dict, landmark_settings: dict = None):
+    """詳細設定が有効な場合、内側アーチ用のCubicSplineを構築して返す。
+    制御点: [(start,0), (subtalar,h0), (navicular,h1), (cuneiform,h2), (m5,h3), (end,0)]
+    landmark_settings が渡された場合は実際のランドマーク位置を使用（フロントエンドの表示と一致）。
+    """
+    if not settings.get('medial_detail_enabled'):
+        return None
+    detail_heights = settings.get('medial_detail_heights', [])
+    if len(detail_heights) < 4:
+        return None
+    ms = settings['medial_start']
+    mp = settings['medial_peak']
+    me = settings['medial_end']
+
+    lm = landmark_settings or {}
+    subtalar_x  = lm.get('subtalar',          (ms + mp) / 2)
+    navicular_x = lm.get('navicular',          mp)
+    cuneiform_x = lm.get('medial_cuneiform',   (mp + me) / 2)
+    metatarsal  = lm.get('metatarsal',         me)
+    m5_x        = (cuneiform_x + (metatarsal + 1.0)) / 2  # フロントエンドと同じ計算
+
+    xs = [ms, subtalar_x, navicular_x, cuneiform_x, m5_x, me]
+    ys = [0.0, float(detail_heights[0]), float(detail_heights[1]),
+          float(detail_heights[2]), float(detail_heights[3]), 0.0]
+    try:
+        return CubicSpline(xs, ys, bc_type='clamped')
+    except Exception as e:
+        log_debug(f"[DETAIL_SPLINE] Failed: {e}")
+        return None
+
+
+def _build_transverse_detail_spline(settings: dict, landmark_settings: dict = None):
+    """横アーチ詳細設定が有効な場合、CubicSplineを構築して返す。
+    制御点: [(start,0), (nav,h0), (cun,h1), (mt,h2), (met,h3), (end,0)]
+    landmark_settings が渡された場合は実際のランドマーク位置を使用。
+    """
+    if not settings.get('transverse_detail_enabled'):
+        return None
+    detail_heights = settings.get('transverse_detail_heights', [])
+    if len(detail_heights) < 4:
+        return None
+    ts = settings['transverse_start']
+    te = settings['transverse_end']
+    tr = max(1.0, te - ts)
+
+    def clamp(v):
+        return max(ts + 0.5, min(te - 0.5, v))
+
+    lm = landmark_settings or {}
+    nav_x = clamp(lm.get('navicular',        ts + tr * 0.15))
+    cun_x = clamp(lm.get('medial_cuneiform', ts + tr * 0.45))
+    met_raw = lm.get('metatarsal', ts + tr * 0.85)
+    mt_x  = clamp((cun_x + clamp(met_raw)) / 2)
+    met_x = clamp(met_raw)
+
+    xs = [ts, nav_x, cun_x, mt_x, met_x, te]
+    ys = [0.0, float(detail_heights[0]), float(detail_heights[1]),
+          float(detail_heights[2]), float(detail_heights[3]), 0.0]
+
+    # xs が狭義単調増加でなければスキップ
+    if not all(xs[i] < xs[i + 1] for i in range(len(xs) - 1)):
+        log_debug(f"[TRANSVERSE_DETAIL_SPLINE] xs not strictly increasing: {xs}")
+        return None
+    try:
+        return CubicSpline(xs, ys, bc_type='clamped')
+    except Exception as e:
+        log_debug(f"[TRANSVERSE_DETAIL_SPLINE] Failed: {e}")
+        return None
 
 
 ARCH_PROFILE = generate_arch_profile()
@@ -272,12 +359,15 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
     arch_transverse = [arch_profile[x][2] for x in arch_x]
     
     custom_boundaries = {}
+    raw_bridges = {}  # Keep raw bridge control points for arch pad polygon smoothing
     if arch_curves:
         for curve_type, points in arch_curves.items():
             if points and len(points) > 1:
                 if curve_type in ('heelBridge', 'lateralBridge', 'metatarsalBridge'):
-                    # Bridge curves: densify via Catmull-Rom for smooth arch pad polygon
+                    # Store raw control points for arch pad polygon (Catmull-Rom applied to whole polygon)
                     raw_pts = [[p['x'], p['y']] for p in points]
+                    raw_bridges[curve_type] = raw_pts
+                    # Also store densified version for other uses
                     if len(raw_pts) >= 2:
                         dense_pts = _densify_open_curve(raw_pts)
                         custom_boundaries[curve_type] = dense_pts
@@ -301,8 +391,14 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
                     raw_pts = [[p['x'], p['y']] for p in points]
                     if len(raw_pts) >= 2:
                         dense_pts = _densify_open_curve(raw_pts)
-                        xs_sorted = [p[0] for p in dense_pts]
-                        ys_sorted = [p[1] for p in dense_pts]
+                        # Ensure X monotonicity for interp1d (Catmull-Rom can overshoot)
+                        mono_pts = [dense_pts[0]]
+                        for dp in dense_pts[1:]:
+                            if dp[0] > mono_pts[-1][0]:
+                                mono_pts.append(dp)
+                        xs_sorted = [p[0] for p in mono_pts]
+                        ys_sorted = [p[1] for p in mono_pts]
+                        log_debug(f"[DENSIFY_CURVE] {curve_type}: {len(raw_pts)} raw -> {len(dense_pts)} dense -> {len(mono_pts)} mono")
                     else:
                         xs_sorted = [p['x'] for p in points]
                         ys_sorted = [p['y'] for p in points]
@@ -315,7 +411,9 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
                                 bounds_error=False,
                                 fill_value=np.nan
                             )
+                            log_debug(f"[INTERP_OK] {curve_type}: interp1d({interp_kind}) with {len(xs_sorted)} pts")
                         except Exception as e:
+                            log_debug(f"[INTERP_FAIL] {curve_type}: {e}")
                             print(f"[WARN] Failed to create {curve_type} interpolator: {e}")
     
     kind = 'cubic' if len(wall_x) > 3 else 'linear'
@@ -328,7 +426,8 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
         'arch_transverse': interp1d(arch_x, arch_transverse, kind=kind, fill_value='extrapolate'),
         'arch_settings': settings,
         'landmark_settings': landmark_settings or {},
-        'custom_boundaries': custom_boundaries
+        'custom_boundaries': custom_boundaries,
+        'raw_bridges': raw_bridges
     }
 
 
@@ -476,23 +575,27 @@ def _distance_to_polygon_edge(x: float, y: float, polygon_path: MplPath) -> floa
     return float(np.sqrt(min_dist_sq))
 
 
-def _build_arch_pad_polygon(custom_boundaries: dict, f_y_min, f_y_max) -> Optional[MplPath]:
-    """ブリッジ点と輪郭境界からアーチパッド輪郭ポリゴンを構築する。
+def _build_arch_pad_functions(custom_boundaries: dict, f_y_min, f_y_max, raw_bridges: dict = None) -> Optional[dict]:
+    """アーチパッド輪郭を連続関数として構築する（ポリゴンではなく）。
 
-    ループ: heelBridge → 外側輪郭(f_y_max) → lateralBridge → metatarsalBridge → 内側輪郭(f_y_min) → close
+    ポリゴンの直線辺ではなく interp1d 連続関数を使うことで、
+    アーチ高さと同様に滑らかな境界を実現する。
+
+    Returns: dict with pad_y_inner(x), pad_y_outer(x), pad_x_min, pad_x_max
     """
-    heel_bridge = custom_boundaries.get('heelBridge')
-    lateral_bridge = custom_boundaries.get('lateralBridge')
-    metatarsal_bridge = custom_boundaries.get('metatarsalBridge')
+    heel_bridge = (raw_bridges or {}).get('heelBridge') or custom_boundaries.get('heelBridge')
+    lateral_bridge = (raw_bridges or {}).get('lateralBridge') or custom_boundaries.get('lateralBridge')
+    metatarsal_bridge = (raw_bridges or {}).get('metatarsalBridge') or custom_boundaries.get('metatarsalBridge')
 
     if not heel_bridge or not lateral_bridge or not metatarsal_bridge:
         return None
 
-    n_samples = 30
-    polygon_points = []
+    # Step 1: Build control points for the closed polygon
+    n_samples = 15
+    control_points = []
 
     # 1. heelBridge (M0 -> L0)
-    polygon_points.extend(heel_bridge)
+    control_points.extend(heel_bridge)
 
     # 2. Outer outline: heelBridge last -> lateralBridge first (f_y_max)
     outer_start_x = heel_bridge[-1][0]
@@ -500,13 +603,13 @@ def _build_arch_pad_polygon(custom_boundaries: dict, f_y_min, f_y_max) -> Option
     if abs(outer_end_x - outer_start_x) > 0.1:
         outer_xs = np.linspace(outer_start_x, outer_end_x, n_samples + 2)[1:-1]
         for ox in outer_xs:
-            polygon_points.append([float(ox), float(f_y_max(ox))])
+            control_points.append([float(ox), float(f_y_max(ox))])
 
     # 3. lateralBridge (L4 -> B1 -> T4)
-    polygon_points.extend(lateral_bridge)
+    control_points.extend(lateral_bridge)
 
     # 4. metatarsalBridge (T4 -> T3 -> T2 -> MB1 -> M7)
-    polygon_points.extend(metatarsal_bridge)
+    control_points.extend(metatarsal_bridge)
 
     # 5. Inner outline: metatarsalBridge last -> heelBridge first (f_y_min, reversed)
     inner_start_x = metatarsal_bridge[-1][0]
@@ -514,15 +617,66 @@ def _build_arch_pad_polygon(custom_boundaries: dict, f_y_min, f_y_max) -> Option
     if abs(inner_end_x - inner_start_x) > 0.1:
         inner_xs = np.linspace(inner_start_x, inner_end_x, n_samples + 2)[1:-1]
         for ix in inner_xs:
-            polygon_points.append([float(ix), float(f_y_min(ix))])
+            control_points.append([float(ix), float(f_y_min(ix))])
 
-    if len(polygon_points) < 3:
+    if len(control_points) < 3:
         return None
 
     try:
-        return MplPath(polygon_points)
+        # Step 2: Catmull-Rom densification (same as frontend getSmoothPath)
+        smooth_points = _densify_closed_polygon(control_points, subdivisions=8)
+
+        # Step 3: Extract Y boundaries as functions of X via ray-casting
+        xs_all = [p[0] for p in smooth_points]
+        pad_x_min = min(xs_all)
+        pad_x_max = max(xs_all)
+
+        n_func_samples = 200
+        sample_xs = np.linspace(pad_x_min, pad_x_max, n_func_samples)
+        y_inner_vals = []
+        y_outer_vals = []
+        valid_xs = []
+
+        n_sp = len(smooth_points)
+        for sx in sample_xs:
+            intersections = []
+            for i in range(n_sp):
+                p1 = smooth_points[i]
+                p2 = smooth_points[(i + 1) % n_sp]
+                x1, x2 = p1[0], p2[0]
+                if (x1 <= sx <= x2) or (x2 <= sx <= x1):
+                    dx = x2 - x1
+                    if abs(dx) > 1e-10:
+                        t = (sx - x1) / dx
+                        if 0 <= t <= 1:
+                            intersections.append(p1[1] + t * (p2[1] - p1[1]))
+            if len(intersections) >= 2:
+                valid_xs.append(sx)
+                y_inner_vals.append(min(intersections))
+                y_outer_vals.append(max(intersections))
+
+        if len(valid_xs) < 4:
+            return None
+
+        valid_xs = np.array(valid_xs)
+        y_inner_vals = np.array(y_inner_vals)
+        y_outer_vals = np.array(y_outer_vals)
+
+        pad_y_inner = interp1d(valid_xs, y_inner_vals, kind='cubic',
+                               bounds_error=False, fill_value=np.nan)
+        pad_y_outer = interp1d(valid_xs, y_outer_vals, kind='cubic',
+                               bounds_error=False, fill_value=np.nan)
+
+        log_debug(f"[ARCH_PAD_FUNC] {len(control_points)} ctrl -> {len(smooth_points)} smooth -> {len(valid_xs)} func samples, X=[{pad_x_min:.1f}, {pad_x_max:.1f}]")
+
+        return {
+            'pad_y_inner': pad_y_inner,
+            'pad_y_outer': pad_y_outer,
+            'pad_x_min': float(valid_xs[0]),
+            'pad_x_max': float(valid_xs[-1])
+        }
     except Exception as e:
-        print(f"[WARN] Failed to create arch pad polygon: {e}")
+        print(f"[WARN] Failed to build arch pad functions: {e}")
         return None
 
 
@@ -782,25 +936,36 @@ def calculate_height(
         arch_height = max(longitudinal_arch_height, transverse_arch_height)
 
         # Micro-height floor for arch pad area (prevents dip to 0mm between arches)
-        arch_pad_outline = profiles.get('arch_pad_outline')
-        if arch_pad_outline is not None and arch_pad_outline.contains_point((x, y)):
-            micro_height_x = max(arch_inner, arch_outer, arch_transverse)
-            if micro_height_x > 0:
-                max_arch_h = max(
-                    profiles['arch_settings'].get('medial_height', 1.0) * arch_scale,
-                    profiles['arch_settings'].get('lateral_height', 0.5) * arch_scale,
-                    0.01
-                )
-                normalized = min(1.0, micro_height_x / max_arch_h)
-                micro_height = 0.4 * normalized
+        # Uses continuous functions (interp1d) instead of polygon for smooth boundaries
+        arch_pad_funcs = profiles.get('arch_pad_functions')
+        if arch_pad_funcs is not None:
+            y_inner = float(arch_pad_funcs['pad_y_inner'](x))
+            y_outer = float(arch_pad_funcs['pad_y_outer'](x))
+            if not (np.isnan(y_inner) or np.isnan(y_outer)) and y_inner <= y <= y_outer:
+                micro_height_x = max(arch_inner, arch_outer, arch_transverse)
+                if micro_height_x > 0:
+                    max_arch_h = max(
+                        profiles['arch_settings'].get('medial_height', 1.0) * arch_scale,
+                        profiles['arch_settings'].get('lateral_height', 0.5) * arch_scale,
+                        0.01
+                    )
+                    normalized = min(1.0, micro_height_x / max_arch_h)
+                    micro_height = 0.4 * normalized
 
-                dist_to_edge = _distance_to_polygon_edge(x, y, arch_pad_outline)
-                falloff_dist = 3.0
-                if dist_to_edge < falloff_dist:
-                    t = dist_to_edge / falloff_dist
-                    micro_height *= t * t * (3 - 2 * t)
+                    # Distance to nearest boundary (continuous, not polygon edge)
+                    dist_to_inner = abs(y - y_inner)
+                    dist_to_outer = abs(y - y_outer)
+                    dist_to_x_start = x - arch_pad_funcs['pad_x_min']
+                    dist_to_x_end = arch_pad_funcs['pad_x_max'] - x
+                    dist_to_edge = min(dist_to_inner, dist_to_outer,
+                                       dist_to_x_start, dist_to_x_end)
 
-                arch_height = max(arch_height, micro_height)
+                    falloff_dist = 3.0
+                    if dist_to_edge < falloff_dist:
+                        t = dist_to_edge / falloff_dist
+                        micro_height *= t * t * (3 - 2 * t)
+
+                    arch_height = max(arch_height, micro_height)
 
         # Blend calculation - unified distance-based approach
         transition_offset = 0.5
@@ -936,12 +1101,12 @@ def generate_insole_mesh(
     profiles = create_profile_interpolators(arch_settings, landmark_settings, wall_params, arch_curves)
     f_y_min, f_y_max, x_min, x_max = get_outline_y_bounds(outline)
 
-    # Build arch pad outline polygon from bridge points
+    # Build arch pad outline as continuous functions (not polygon)
     custom_boundaries = profiles.get('custom_boundaries', {})
-    arch_pad_polygon = _build_arch_pad_polygon(custom_boundaries, f_y_min, f_y_max)
-    if arch_pad_polygon:
-        profiles['arch_pad_outline'] = arch_pad_polygon
-        log_debug(f"[ARCH_PAD] Polygon built with {len(arch_pad_polygon.vertices)} vertices")
+    raw_bridges = profiles.get('raw_bridges', {})
+    arch_pad_funcs = _build_arch_pad_functions(custom_boundaries, f_y_min, f_y_max, raw_bridges=raw_bridges)
+    if arch_pad_funcs:
+        profiles['arch_pad_functions'] = arch_pad_funcs
 
     # Grid
     outline_path = MplPath(outline)

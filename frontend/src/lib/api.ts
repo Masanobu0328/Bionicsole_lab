@@ -34,6 +34,11 @@ export type ArchSettings = {
     lateral_y_end: number;
     transverse_y_start: number;
     transverse_y_end: number;
+    // Detailed height settings (per-landmark Z control)
+    medial_detail_enabled: boolean;
+    medial_detail_heights: number[]; // [subtalar, navicular, cuneiform, m5] in mm
+    transverse_detail_enabled: boolean;
+    transverse_detail_heights: number[]; // [nav, cun, mt, met] in mm
 };
 
 export type InsoleParams = {
