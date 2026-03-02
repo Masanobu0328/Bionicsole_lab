@@ -220,7 +220,7 @@ export default function LandmarkEditorCanvas() {
 
                         {/* Background Image (Read-only) */}
                         {outlineImage && (
-                            <g transform={`translate(${outlineImageTransform.x}, ${outlineImageTransform.y}) scale(${outlineImageTransform.scale}) rotate(${outlineImageTransform.rotation})`}>
+                            <g transform={`translate(${outlineImageTransform.x}, ${outlineImageTransform.y}) scale(${outlineImageTransform.scale}) rotate(${outlineImageTransform.rotation}, ${outlineImageSize.width / 2}, ${outlineImageSize.height / 2})`}>
                                 <g style={{ transformOrigin: 'center', transformBox: 'fill-box', transform: `scale(${outlineImageTransform.flipX ? -1 : 1}, ${outlineImageTransform.flipY ? -1 : 1})` }}>
                                     <image
                                         href={outlineImage}

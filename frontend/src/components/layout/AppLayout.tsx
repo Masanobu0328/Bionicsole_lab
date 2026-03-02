@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { Undo, Redo, Save } from 'lucide-react';
+import { Undo, Redo, Save, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useStore } from '@/lib/store';
 
 export default function Layout({
     children,
@@ -12,6 +13,20 @@ export default function Layout({
     children: React.ReactNode;
     sidebar: React.ReactNode;
 }) {
+    const { savePatientPreset, patientId } = useStore();
+    const [saveState, setSaveState] = useState<'idle' | 'saved' | 'error'>('idle');
+
+    const handleSave = () => {
+        if (!patientId) {
+            setSaveState('error');
+            setTimeout(() => setSaveState('idle'), 2000);
+            return;
+        }
+        const ok = savePatientPreset();
+        setSaveState(ok ? 'saved' : 'error');
+        setTimeout(() => setSaveState('idle'), 2000);
+    };
+
     return (
         <div className="flex flex-col h-screen w-full bg-background text-foreground overflow-hidden dark">
             {/* Header */}
@@ -40,9 +55,22 @@ export default function Layout({
                         </Button>
                     </div>
 
-                    <Button variant="outline" size="sm" className="gap-2 border-primary/20 hover:border-primary/50 text-foreground">
-                        <Save className="h-4 w-4 text-primary" />
-                        <span>Save Project</span>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className={`gap-2 text-foreground transition-colors ${
+                            saveState === 'saved' ? 'border-green-500/50 text-green-400' :
+                            saveState === 'error' ? 'border-red-500/50 text-red-400' :
+                            'border-primary/20 hover:border-primary/50'
+                        }`}
+                        onClick={handleSave}
+                    >
+                        {saveState === 'saved'
+                            ? <><CheckCircle2 className="h-4 w-4" /><span>Saved!</span></>
+                            : saveState === 'error'
+                            ? <><Save className="h-4 w-4" /><span>{patientId ? 'Save Failed' : 'No Patient'}</span></>
+                            : <><Save className="h-4 w-4 text-primary" /><span>Save Project</span></>
+                        }
                     </Button>
                 </div>
             </header>

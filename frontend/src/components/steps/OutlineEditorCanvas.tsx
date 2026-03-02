@@ -2,19 +2,19 @@ import React, { useRef, useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { parseOutlineCsv, getSmoothPath } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
-import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, Move, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 
 export default function OutlineEditorCanvas() {
-    const { 
-        outlineImage, 
+    const {
+        outlineImage,
         outlineImageTransform,
         outlineImageSize,
         setOutlineImageSize,
         setOutlineImageTransform,
-        outlinePoints, 
-        setOutlinePoints 
+        outlinePoints,
+        setOutlinePoints
     } = useStore();
 
     const svgRef = useRef<SVGSVGElement>(null);
@@ -25,10 +25,12 @@ export default function OutlineEditorCanvas() {
     const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
     const [isPanning, setIsPanning] = useState(false);
     const [lastPanPos, setLastPanPos] = useState({ x: 0, y: 0 });
-    
+
     // Modes
     const [isImageEditMode, setIsImageEditMode] = useState(false);
     const [isResizingImage, setIsResizingImage] = useState(false);
+    const [isRotating, setIsRotating] = useState(false);
+    const rotateStartRef = useRef<{ angle: number; initialRotation: number }>({ angle: 0, initialRotation: 0 });
 
     // Auto-fit Logic
     const fitView = () => {
@@ -51,7 +53,6 @@ export default function OutlineEditorCanvas() {
         if (outlineImage) {
             const img = new Image();
             img.onload = () => {
-                // Initial size based on typical foot aspect or natural
                 setOutlineImageSize({ width: img.naturalWidth / 5, height: img.naturalHeight / 5 });
             };
             img.src = outlineImage;
@@ -70,6 +71,12 @@ export default function OutlineEditorCanvas() {
         };
     };
 
+    // 画像の中心（SVGロジカル座標系）を返す
+    const getImageCenter = () => ({
+        x: outlineImageTransform.x + outlineImageSize.width / 2 * outlineImageTransform.scale,
+        y: outlineImageTransform.y + outlineImageSize.height / 2 * outlineImageTransform.scale,
+    });
+
     const handleMouseDown = (index: number, e: React.MouseEvent) => {
         if (isImageEditMode) return;
         e.preventDefault(); e.stopPropagation();
@@ -82,8 +89,17 @@ export default function OutlineEditorCanvas() {
         setLastPanPos({ x: e.clientX, y: e.clientY });
     };
 
+    const handleRotateStart = (e: React.MouseEvent) => {
+        e.preventDefault(); e.stopPropagation();
+        const pos = getLogicalPos(e);
+        const center = getImageCenter();
+        const startAngle = Math.atan2(pos.y - center.y, pos.x - center.x) * (180 / Math.PI);
+        rotateStartRef.current = { angle: startAngle, initialRotation: outlineImageTransform.rotation };
+        setIsRotating(true);
+    };
+
     const handlePanStart = (e: React.MouseEvent) => {
-        if (draggingIndex === null) {
+        if (draggingIndex === null && !isRotating) {
             setIsPanning(true);
             setLastPanPos({ x: e.clientX, y: e.clientY });
         }
@@ -92,7 +108,7 @@ export default function OutlineEditorCanvas() {
     const handleWheel = (e: React.WheelEvent) => {
         e.preventDefault();
         if (isImageEditMode && outlineImage) {
-            const factor = e.deltaY < 0 ? 1.02 : 0.98; // Finer scaling
+            const factor = e.deltaY < 0 ? 1.02 : 0.98;
             setOutlineImageTransform({ scale: outlineImageTransform.scale * factor });
         } else {
             const factor = e.deltaY < 0 ? 1.1 : 0.9;
@@ -106,18 +122,24 @@ export default function OutlineEditorCanvas() {
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
-            if (isResizingImage) {
+            if (isRotating) {
+                const pos = getLogicalPos(e);
+                const center = getImageCenter();
+                const currentAngle = Math.atan2(pos.y - center.y, pos.x - center.x) * (180 / Math.PI);
+                const delta = currentAngle - rotateStartRef.current.angle;
+                setOutlineImageTransform({ rotation: rotateStartRef.current.initialRotation + delta });
+            } else if (isResizingImage) {
                 const dx = e.clientX - lastPanPos.x;
-                const factor = 1 + (dx / 500); // Scale based on horizontal drag
+                const factor = 1 + (dx / 500);
                 setOutlineImageTransform({ scale: outlineImageTransform.scale * factor });
                 setLastPanPos({ x: e.clientX, y: e.clientY });
             } else if (isPanning) {
                 const dx = e.clientX - lastPanPos.x;
                 const dy = e.clientY - lastPanPos.y;
                 if (isImageEditMode && outlineImage) {
-                    setOutlineImageTransform({ 
-                        x: outlineImageTransform.x + dx / transform.k, 
-                        y: outlineImageTransform.y + dy / transform.k 
+                    setOutlineImageTransform({
+                        x: outlineImageTransform.x + dx / transform.k,
+                        y: outlineImageTransform.y + dy / transform.k
                     });
                 } else {
                     setTransform(t => ({ ...t, x: t.x + dx, y: t.y + dy }));
@@ -129,28 +151,35 @@ export default function OutlineEditorCanvas() {
                 const dx = pos.x - newPoints[draggingIndex].x;
                 const dy = pos.y - newPoints[draggingIndex].y;
                 newPoints[draggingIndex] = pos;
-                const radius = 4;
-                for (let i = 1; i <= radius; i++) {
-                    const factor = Math.exp(-(i * i) / (2 * 1.5 * 1.5));
-                    const prevIdx = (draggingIndex - i + newPoints.length) % newPoints.length;
-                    const nextIdx = (draggingIndex + i) % newPoints.length;
+                const neighbors = [
+                    { offset: 1, factor: 0.35 },
+                    { offset: 2, factor: 0.12 },
+                ];
+                for (const { offset, factor } of neighbors) {
+                    const prevIdx = (draggingIndex - offset + newPoints.length) % newPoints.length;
+                    const nextIdx = (draggingIndex + offset) % newPoints.length;
                     newPoints[prevIdx] = { x: newPoints[prevIdx].x + dx * factor, y: newPoints[prevIdx].y + dy * factor };
                     newPoints[nextIdx] = { x: newPoints[nextIdx].x + dx * factor, y: newPoints[nextIdx].y + dy * factor };
                 }
                 setOutlinePoints(newPoints);
             }
         };
-        const handleMouseUp = () => { setDraggingIndex(null); setIsPanning(false); setIsResizingImage(false); };
+        const handleMouseUp = () => {
+            setDraggingIndex(null);
+            setIsPanning(false);
+            setIsResizingImage(false);
+            setIsRotating(false);
+        };
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
         return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
-    }, [draggingIndex, outlinePoints, setOutlinePoints, isPanning, isResizingImage, lastPanPos, transform, isImageEditMode, outlineImage, outlineImageTransform, setOutlineImageTransform]);
+    }, [draggingIndex, outlinePoints, setOutlinePoints, isPanning, isResizingImage, isRotating, lastPanPos, transform, isImageEditMode, outlineImage, outlineImageTransform, outlineImageSize, setOutlineImageTransform]);
 
     // Initial Setup
     useEffect(() => {
-        if (outlinePoints.length === 0) setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, 260, 50)); 
+        if (outlinePoints.length === 0) setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, 260, 50));
     }, []);
-    
+
     useEffect(() => {
         const timer = setTimeout(fitView, 100);
         return () => clearTimeout(timer);
@@ -165,6 +194,13 @@ export default function OutlineEditorCanvas() {
     const bounds = getBounds();
     const pathD = getSmoothPath(outlinePoints, true);
 
+    // 回転ハンドルの位置（画像ローカル座標系、上中央の少し上）
+    const handleOffsetY = -20;
+    const rotHandleX = outlineImageSize.width / 2;
+    const rotHandleY = handleOffsetY;
+
+    const rotationDisplay = Math.round(outlineImageTransform.rotation);
+
     return (
         <div ref={containerRef} className="relative w-full h-full bg-background overflow-hidden flex flex-col border border-white/5 rounded-lg">
              {/* Toolbar */}
@@ -178,15 +214,29 @@ export default function OutlineEditorCanvas() {
                 </Toggle>
                 {isImageEditMode && (
                     <div className="flex flex-col gap-1 mt-1 border-t border-white/10 pt-1">
-                        <Button variant="ghost" size="icon" onClick={toggleFlipX} className={outlineImageTransform.flipX ? "bg-white/20 text-white" : "text-white"}><FlipHorizontal className="h-4 w-4"/></Button>
-                        <Button variant="ghost" size="icon" onClick={toggleFlipY} className={outlineImageTransform.flipY ? "bg-white/20 text-white" : "text-white"}><FlipVertical className="h-4 w-4"/></Button>
-                        <Button variant="ghost" size="icon" className="text-white" onClick={() => scaleImage(1.05)}><Plus className="h-4 w-4"/></Button>
-                        <Button variant="ghost" size="icon" className="text-white" onClick={() => scaleImage(0.95)}><Minus className="h-4 w-4"/></Button>
+                        <Button variant="ghost" size="icon" onClick={toggleFlipX} className={outlineImageTransform.flipX ? "bg-white/20 text-white" : "text-white"} title="左右反転"><FlipHorizontal className="h-4 w-4"/></Button>
+                        <Button variant="ghost" size="icon" onClick={toggleFlipY} className={outlineImageTransform.flipY ? "bg-white/20 text-white" : "text-white"} title="上下反転"><FlipVertical className="h-4 w-4"/></Button>
+                        <Button variant="ghost" size="icon" className="text-white" onClick={() => scaleImage(1.05)} title="拡大"><Plus className="h-4 w-4"/></Button>
+                        <Button variant="ghost" size="icon" className="text-white" onClick={() => scaleImage(0.95)} title="縮小"><Minus className="h-4 w-4"/></Button>
+                        <div className="h-px bg-white/10 my-1" />
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-white text-[9px] font-bold leading-none"
+                            onClick={() => setOutlineImageTransform({ rotation: 0 })}
+                            title="回転リセット"
+                        >
+                            {rotationDisplay}°
+                        </Button>
                     </div>
                 )}
             </div>
 
-            <div className={`flex-1 relative ${isPanning ? 'cursor-grabbing' : (isImageEditMode ? 'cursor-move' : 'cursor-default')}`} onMouseDown={handlePanStart} onWheel={handleWheel}>
+            <div
+                className={`flex-1 relative ${isRotating ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : isImageEditMode ? 'cursor-move' : 'cursor-default'}`}
+                onMouseDown={handlePanStart}
+                onWheel={handleWheel}
+            >
                 <svg ref={svgRef} className="w-full h-full block touch-none">
                     <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`}>
                         <rect x={-5000} y={-5000} width={10000} height={10000} fill="transparent" />
@@ -202,16 +252,56 @@ export default function OutlineEditorCanvas() {
                                 <line x1={i * 50} y1={-100} x2={i * 50} y2={500} stroke="#14b8a6" strokeWidth="0.3" strokeDasharray="2 2" opacity="0.2" />
                             </g>
                         ))}
-                        
+
                         {/* Background Image */}
                         {outlineImage && (
-                            <g transform={`translate(${outlineImageTransform.x}, ${outlineImageTransform.y}) scale(${outlineImageTransform.scale}) rotate(${outlineImageTransform.rotation})`}>
+                            <g transform={`translate(${outlineImageTransform.x}, ${outlineImageTransform.y}) scale(${outlineImageTransform.scale}) rotate(${outlineImageTransform.rotation}, ${outlineImageSize.width / 2}, ${outlineImageSize.height / 2})`}>
+                                {/* Image + resize handle (inside flip group) */}
                                 <g style={{ transformOrigin: 'center', transformBox: 'fill-box', transform: `scale(${outlineImageTransform.flipX ? -1 : 1}, ${outlineImageTransform.flipY ? -1 : 1})` }}>
                                     <image href={outlineImage} x={0} y={0} width={outlineImageSize.width} height={outlineImageSize.height} opacity={isImageEditMode ? 0.8 : outlineImageTransform.opacity} className={isImageEditMode ? "outline outline-2 outline-primary" : ""} />
                                     {isImageEditMode && (
-                                        <circle cx={outlineImageSize.width} cy={outlineImageSize.height} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} className="cursor-se-resize" onMouseDown={handleResizeStart} />
+                                        <circle cx={outlineImageSize.width} cy={outlineImageSize.height} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'se-resize' }} onMouseDown={handleResizeStart} />
                                     )}
                                 </g>
+                                {/* Rotate handle (outside flip group, rotates with image) */}
+                                {isImageEditMode && (
+                                    <>
+                                        <line
+                                            x1={rotHandleX}
+                                            y1={0}
+                                            x2={rotHandleX}
+                                            y2={rotHandleY}
+                                            stroke="#ffffff"
+                                            strokeWidth={1.5 / transform.k}
+                                            strokeDasharray={`${3 / transform.k} ${2 / transform.k}`}
+                                            opacity={0.5}
+                                            style={{ pointerEvents: 'none' }}
+                                        />
+                                        <circle
+                                            cx={rotHandleX}
+                                            cy={rotHandleY}
+                                            r={8 / transform.k}
+                                            fill={isRotating ? "#ffffff" : "#f59e0b"}
+                                            stroke="#ffffff"
+                                            strokeWidth={2 / transform.k}
+                                            style={{ cursor: 'crosshair' }}
+                                            onMouseDown={handleRotateStart}
+                                        />
+                                        {/* 回転角ラベル（ドラッグ中） */}
+                                        {isRotating && (
+                                            <text
+                                                x={rotHandleX + 12 / transform.k}
+                                                y={rotHandleY}
+                                                fontSize={10 / transform.k}
+                                                fill="#f59e0b"
+                                                fontWeight="bold"
+                                                style={{ pointerEvents: 'none', userSelect: 'none' }}
+                                            >
+                                                {rotationDisplay}°
+                                            </text>
+                                        )}
+                                    </>
+                                )}
                             </g>
                         )}
 
@@ -226,8 +316,9 @@ export default function OutlineEditorCanvas() {
                 {isImageEditMode ? (
                     <div className="flex items-center gap-3">
                         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"/>画像移動: ドラッグ</span>
-                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"/>サイズ: ハンドル</span>
-                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"/>微調整: ホイール</span>
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-400"/>回転: 上ハンドルをドラッグ</span>
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"/>サイズ: 右下ハンドル</span>
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary"/>拡縮: ホイール</span>
                     </div>
                 ) : (
                     <div className="flex items-center gap-3">

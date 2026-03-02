@@ -124,6 +124,10 @@ type PatientPreset = {
         landmarkConfig: Record<string, number>;
         widthConfig: Record<string, number>;
         archCurves: ArchCurves | null;
+        outlinePoints: { x: number; y: number }[];
+        outlineImageTransform: { x: number; y: number; scale: number; rotation: number; opacity: number; flipX: boolean; flipY: boolean };
+        outlineImageSize: { width: number; height: number };
+        outlineImage: string | null;
     };
 };
 
@@ -334,6 +338,10 @@ export const useStore = create<State>((set, get) => ({
                 landmarkConfig: state.landmarkConfig,
                 widthConfig: state.widthConfig,
                 archCurves: state.archCurves,
+                outlinePoints: state.outlinePoints,
+                outlineImageTransform: state.outlineImageTransform,
+                outlineImageSize: state.outlineImageSize,
+                outlineImage: state.outlineImage,
             },
         };
 
@@ -373,6 +381,10 @@ export const useStore = create<State>((set, get) => ({
                 landmarkConfig: p.landmarkConfig,
                 widthConfig: p.widthConfig,
                 archCurves: p.archCurves,
+                outlinePoints: p.outlinePoints ?? [],
+                outlineImageTransform: p.outlineImageTransform ?? { x: 0, y: 0, scale: 1, rotation: 0, opacity: 0.5, flipX: false, flipY: false },
+                outlineImageSize: p.outlineImageSize ?? { width: 100, height: 100 },
+                outlineImage: p.outlineImage ?? null,
             });
             return true;
         } catch {

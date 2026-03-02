@@ -151,7 +151,7 @@ def generate_insole_worker(task_id: str, params: InsoleParams):
             raise Exception("Patient outline not found")
 
         flip_x = params.flip_orientation
-        flip_y = False
+        flip_y = False  # Outline Y stays as-is; right foot mirroring applied post-generation
 
         arch_settings_dict = params.arch_settings.dict()
 
@@ -195,6 +195,22 @@ def generate_insole_worker(task_id: str, params: InsoleParams):
             progress_callback=progress_callback
         )
         
+        # Mirror mesh for right foot.
+        # Default generation (no flip) produces what appears as LEFT FOOT in the viewer.
+        # For RIGHT FOOT: mirror Y axis using apply_transform (handles normals automatically).
+        import numpy as np
+        if params.foot_side == 'right':
+            y_min = float(mesh.vertices[:, 1].min())
+            y_max = float(mesh.vertices[:, 1].max())
+            mirror = np.array([
+                [1,  0, 0, 0],
+                [0, -1, 0, y_min + y_max],
+                [0,  0, 1, 0],
+                [0,  0, 0, 1],
+            ], dtype=float)
+            mesh.apply_transform(mirror)
+            print(f"[DEBUG] Applied Y-mirror for right foot")
+
         # Apply Lattice if enabled
         info = None
         if params.enable_lattice:

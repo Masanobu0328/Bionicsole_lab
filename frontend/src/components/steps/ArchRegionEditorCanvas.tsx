@@ -94,8 +94,12 @@ export default function ArchRegionEditorCanvas() {
             const lastPt = curves.medial[curves.medial.length - 1];
             updates.medial_end = Math.max(0, Math.min(100, ((lastPt.x - bounds.minX) / bounds.width) * 100));
         }
-        if (Object.keys(updates).length > 0) updateArchSettings(activeFootSide, updates);
-    }, [bounds, updateArchSettings, activeFootSide]);
+        if (Object.keys(updates).length > 0) {
+            // X軸方向の範囲（足の長さ方向）は左右共通なので両足に適用する
+            updateArchSettings('right', updates);
+            updateArchSettings('left', updates);
+        }
+    }, [bounds, updateArchSettings]);
 
     // Convenience wrappers (same reference count in deps)
     const syncTransverseToArchSettings = React.useCallback(
