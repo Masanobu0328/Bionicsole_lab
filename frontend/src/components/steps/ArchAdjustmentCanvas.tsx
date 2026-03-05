@@ -45,6 +45,17 @@ function CrossSectionViewer() {
     const archSettings = activeFootSide === 'right' ? archSettingsRight : archSettingsLeft;
     const isRightFoot = activeFootSide === 'right';
 
+    // アーチX軸位置（開始・ピーク・終了）は左右共通なので、マウント時に右足の値を左足に同期する
+    const archSettingsRightRef = React.useRef(archSettingsRight);
+    React.useEffect(() => {
+        const r = archSettingsRightRef.current;
+        updateArchSettings('left', {
+            medial_start: r.medial_start, medial_peak: r.medial_peak, medial_end: r.medial_end,
+            lateral_start: r.lateral_start, lateral_peak: r.lateral_peak, lateral_end: r.lateral_end,
+            transverse_start: r.transverse_start, transverse_peak: r.transverse_peak, transverse_end: r.transverse_end,
+        });
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     const [xPercent, setXPercent] = useState(50);
 
     // ベルカーブ計算（詳細設定初期化・自動更新用）
