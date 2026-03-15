@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { generateInsole, getDownloadUrl, getTaskStatus, resolveApiUrl } from '@/lib/api';
-import { computeAutoBottomOutline } from '@/lib/geometry-utils';
+import { computeAutoBottomOutline, densifyClosedPolygon } from '@/lib/geometry-utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw } from 'lucide-react';
@@ -93,13 +93,18 @@ export default function PreviewStep() {
                 ...widthConfig,
             };
 
+            // Densify outline for smooth mesh generation (control points -> smooth curve)
+            // subdivisions=6: 50pt -> 300pt, 30pt -> 180pt. Backend further densifies heel region.
+            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 6);
+
             // Compute bottom outline points if enabled
             let bottomPoints: { x: number; y: number }[] | undefined;
             if (useBottomOutline) {
                 if (autoBottomOutline) {
-                    bottomPoints = computeAutoBottomOutline(outlinePoints, selectedSettings);
+                    // Compute from dense outline for accurate offset
+                    bottomPoints = computeAutoBottomOutline(denseOutlinePoints, selectedSettings);
                 } else if (bottomOutlinePoints.length > 0) {
-                    bottomPoints = bottomOutlinePoints;
+                    bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 6);
                 }
             }
 
@@ -119,7 +124,7 @@ export default function PreviewStep() {
                 enable_lattice: enableLattice,
                 lattice_cell_size: latticeCellSize,
                 strut_radius: strutRadius,
-                outline_points: outlinePoints,
+                outline_points: denseOutlinePoints,
                 landmark_config: mergedLandmarkConfig,
                 arch_curves: archCurves || undefined,
                 bottom_outline_points: bottomPoints

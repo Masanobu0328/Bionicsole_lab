@@ -17,6 +17,100 @@ function dist(p1: {x: number, y: number}, p2: {x: number, y: number}) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 
+// Perpendicular distance from point p to line segment (a, b)
+function perpendicularDist(p: {x: number, y: number}, a: {x: number, y: number}, b: {x: number, y: number}): number {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (dx === 0 && dy === 0) return dist(p, a);
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    return Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
+}
+
+// Ramer-Douglas-Peucker simplification on an open segment [start..end]
+function rdpSegment(points: {x: number, y: number}[], start: number, end: number, epsilon: number, keep: boolean[]): void {
+    if (end <= start + 1) return;
+    let maxDist = 0;
+    let maxIdx = start;
+    for (let i = start + 1; i < end; i++) {
+        const d = perpendicularDist(points[i], points[start], points[end]);
+        if (d > maxDist) { maxDist = d; maxIdx = i; }
+    }
+    if (maxDist > epsilon) {
+        keep[maxIdx] = true;
+        rdpSegment(points, start, maxIdx, epsilon, keep);
+        rdpSegment(points, maxIdx, end, epsilon, keep);
+    }
+}
+
+/**
+ * Simplify a closed polygon using Ramer-Douglas-Peucker.
+ * epsilon is the max allowed deviation in the same units as the points (mm).
+ */
+export function rdpSimplify(points: {x: number, y: number}[], epsilon: number): {x: number, y: number}[] {
+    const n = points.length;
+    if (n <= 3) return [...points];
+
+    // Find the two points farthest apart — they become anchors for two open chains
+    let maxDist = 0;
+    let splitA = 0, splitB = Math.floor(n / 2);
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const d = dist(points[i], points[j]);
+            if (d > maxDist) { maxDist = d; splitA = i; splitB = j; }
+        }
+    }
+
+    // Reorder so splitA is at index 0
+    const reordered = [...points.slice(splitA), ...points.slice(0, splitA)];
+    const pivot = (splitB - splitA + n) % n;
+
+    const keep = new Array(n).fill(false);
+    keep[0] = true;
+    keep[pivot] = true;
+
+    // Chain 1: indices 0 .. pivot (valid range, no out-of-bounds)
+    rdpSegment(reordered, 0, pivot, epsilon, keep);
+
+    // Chain 2: indices pivot .. n-1, closing back to index 0
+    // Build a temp array [pivot, pivot+1, ..., n-1, 0] so rdpSegment indices are safe
+    const chain2 = [...reordered.slice(pivot), reordered[0]];
+    const keep2 = new Array(chain2.length).fill(false);
+    keep2[0] = true;
+    keep2[chain2.length - 1] = true;
+    rdpSegment(chain2, 0, chain2.length - 1, epsilon, keep2);
+    // Map keep2 results back (skip first and last which are already in keep)
+    for (let i = 1; i < chain2.length - 1; i++) {
+        if (keep2[i]) keep[pivot + i] = true;
+    }
+
+    const simplified = reordered.filter((_, i) => keep[i]);
+    return simplified.length >= 3 ? simplified : reordered.slice(0, 3);
+}
+
+/**
+ * Simplify outline to approximately targetCount points.
+ * Binary-searches epsilon to hit the target.
+ */
+export function simplifyToCount(points: {x: number, y: number}[], targetCount: number): {x: number, y: number}[] {
+    if (points.length <= targetCount) return [...points];
+    let lo = 0, hi = 100;
+    let best = points;
+    for (let iter = 0; iter < 20; iter++) {
+        const mid = (lo + hi) / 2;
+        const simplified = rdpSimplify(points, mid);
+        if (simplified.length > targetCount) {
+            lo = mid;
+        } else {
+            best = simplified;
+            hi = mid;
+        }
+        if (Math.abs(simplified.length - targetCount) <= 2) break;
+    }
+    return best;
+}
+
 // Resample a polygon to have exactly n equidistant vertices
 export function resamplePolygon(points: { x: number; y: number }[], targetCount: number): { x: number; y: number }[] {
     if (points.length < 2) return points;

@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Download, Loader2, Upload, ChevronRight, ChevronLeft, CheckCircle2 } from 'lucide-react';
 import { useStore, STEPS } from '@/lib/store';
 import { getPatients, generateInsole, getTaskStatus, Patient } from '@/lib/api';
-import { parseOutlineCsv, resamplePolygon } from '@/lib/geometry-utils';
+import { parseOutlineCsv } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 
 const LANDMARK_LIST = [
@@ -35,7 +35,7 @@ export default function Sidebar() {
         footSide, setFootSide,
         flipOrientation, setFlipOrientation,
         
-        outlinePoints, setOutlineImage, setOutlinePoints,
+        setOutlineImage, setOutlinePoints,
         landmarkConfig, updateLandmarkPos,
         activeLandmarkId, setActiveLandmarkId,
         
@@ -100,10 +100,6 @@ export default function Sidebar() {
 
     // Navigation Helpers
     const nextStep = () => {
-        if (currentStep === STEPS.OUTLINE) {
-            const resampled = resamplePolygon(outlinePoints, 200);
-            setOutlinePoints(resampled);
-        }
         setCurrentStep(Math.min(Object.keys(STEPS).length - 1, currentStep + 1));
     };
     const prevStep = () => setCurrentStep(Math.max(0, currentStep - 1));

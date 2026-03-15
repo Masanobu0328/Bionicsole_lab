@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useStore } from '@/lib/store';
-import { parseOutlineCsv, getSmoothPath, computeAutoBottomOutline } from '@/lib/geometry-utils';
+import { parseOutlineCsv, getSmoothPath, computeAutoBottomOutline, simplifyToCount } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -308,6 +308,40 @@ export default function OutlineEditorCanvas() {
                 <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k * 1.2}))} title="拡大"><ZoomIn className="h-4 w-4"/></Button>
                 <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k / 1.2}))} title="縮小"><ZoomOut className="h-4 w-4"/></Button>
                 <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={fitView} title="全体表示"><Maximize className="h-4 w-4"/></Button>
+                <div className="h-px bg-white/10 my-1" />
+                {/* Simplify controls (top tab only) */}
+                {!isBottomTab && (
+                    <div className="flex flex-col gap-1">
+                        <div className="text-[9px] text-white/40 text-center font-mono">{outlinePoints.length}pt</div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-[9px] text-white/70 hover:text-white h-6 px-1"
+                            onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 30))}
+                            title="粗め (~30点)"
+                        >
+                            粗
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-[9px] text-white/70 hover:text-white h-6 px-1"
+                            onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 60))}
+                            title="普通 (~60点)"
+                        >
+                            中
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-[9px] text-white/70 hover:text-white h-6 px-1"
+                            onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 120))}
+                            title="細かめ (~120点)"
+                        >
+                            細
+                        </Button>
+                    </div>
+                )}
                 <div className="h-px bg-white/10 my-1" />
                 <Toggle pressed={isImageEditMode} onPressedChange={setIsImageEditMode} className={isImageEditMode ? "bg-primary text-primary-foreground" : "text-white"} disabled={!outlineImage}>
                     <ImageIcon className="h-4 w-4" />
