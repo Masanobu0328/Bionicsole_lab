@@ -1,10 +1,12 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useStore } from '@/lib/store';
-import { parseOutlineCsv, getSmoothPath } from '@/lib/geometry-utils';
+import { parseOutlineCsv, getSmoothPath, computeAutoBottomOutline } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
+
+type OutlineTab = 'top' | 'bottom';
 
 export default function OutlineEditorCanvas() {
     const {
@@ -14,8 +16,30 @@ export default function OutlineEditorCanvas() {
         setOutlineImageSize,
         setOutlineImageTransform,
         outlinePoints,
-        setOutlinePoints
+        setOutlinePoints,
+        bottomOutlinePoints,
+        setBottomOutlinePoints,
+        useBottomOutline,
+        setUseBottomOutline,
+        autoBottomOutline,
+        setAutoBottomOutline,
+        archSettingsRight,
     } = useStore();
+
+    const [activeTab, setActiveTab] = useState<OutlineTab>('top');
+
+    // Compute auto bottom outline when in auto mode
+    const autoBottomPoints = useMemo(() => {
+        if (!useBottomOutline || !autoBottomOutline || outlinePoints.length < 3) return [];
+        return computeAutoBottomOutline(outlinePoints, archSettingsRight);
+    }, [outlinePoints, archSettingsRight, useBottomOutline, autoBottomOutline]);
+
+    // Active points for editing depend on tab
+    const isBottomTab = activeTab === 'bottom';
+    const editablePoints = isBottomTab
+        ? (autoBottomOutline ? autoBottomPoints : bottomOutlinePoints)
+        : outlinePoints;
+    const isReadOnly = isBottomTab && autoBottomOutline;
 
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -78,7 +102,7 @@ export default function OutlineEditorCanvas() {
     });
 
     const handleMouseDown = (index: number, e: React.MouseEvent) => {
-        if (isImageEditMode) return;
+        if (isImageEditMode || isReadOnly) return;
         e.preventDefault(); e.stopPropagation();
         setDraggingIndex(index);
     };
@@ -145,23 +169,27 @@ export default function OutlineEditorCanvas() {
                     setTransform(t => ({ ...t, x: t.x + dx, y: t.y + dy }));
                 }
                 setLastPanPos({ x: e.clientX, y: e.clientY });
-            } else if (draggingIndex !== null && !isImageEditMode) {
+            } else if (draggingIndex !== null && !isImageEditMode && !isReadOnly) {
                 const pos = getLogicalPos(e);
-                const newPoints = [...outlinePoints];
-                const dx = pos.x - newPoints[draggingIndex].x;
-                const dy = pos.y - newPoints[draggingIndex].y;
-                newPoints[draggingIndex] = pos;
+                const currentPoints = isBottomTab ? [...bottomOutlinePoints] : [...outlinePoints];
+                const dx = pos.x - currentPoints[draggingIndex].x;
+                const dy = pos.y - currentPoints[draggingIndex].y;
+                currentPoints[draggingIndex] = pos;
                 const neighbors = [
                     { offset: 1, factor: 0.35 },
                     { offset: 2, factor: 0.12 },
                 ];
                 for (const { offset, factor } of neighbors) {
-                    const prevIdx = (draggingIndex - offset + newPoints.length) % newPoints.length;
-                    const nextIdx = (draggingIndex + offset) % newPoints.length;
-                    newPoints[prevIdx] = { x: newPoints[prevIdx].x + dx * factor, y: newPoints[prevIdx].y + dy * factor };
-                    newPoints[nextIdx] = { x: newPoints[nextIdx].x + dx * factor, y: newPoints[nextIdx].y + dy * factor };
+                    const prevIdx = (draggingIndex - offset + currentPoints.length) % currentPoints.length;
+                    const nextIdx = (draggingIndex + offset) % currentPoints.length;
+                    currentPoints[prevIdx] = { x: currentPoints[prevIdx].x + dx * factor, y: currentPoints[prevIdx].y + dy * factor };
+                    currentPoints[nextIdx] = { x: currentPoints[nextIdx].x + dx * factor, y: currentPoints[nextIdx].y + dy * factor };
                 }
-                setOutlinePoints(newPoints);
+                if (isBottomTab) {
+                    setBottomOutlinePoints(currentPoints);
+                } else {
+                    setOutlinePoints(currentPoints);
+                }
             }
         };
         const handleMouseUp = () => {
@@ -193,6 +221,9 @@ export default function OutlineEditorCanvas() {
 
     const bounds = getBounds();
     const pathD = getSmoothPath(outlinePoints, true);
+    const bottomPathD = useBottomOutline && editablePoints.length > 0 && isBottomTab
+        ? getSmoothPath(editablePoints, true) : '';
+    const topPathDForReference = isBottomTab ? getSmoothPath(outlinePoints, true) : '';
 
     // 回転ハンドルの位置（画像ローカル座標系、上中央の少し上）
     const handleOffsetY = -20;
@@ -203,6 +234,75 @@ export default function OutlineEditorCanvas() {
 
     return (
         <div ref={containerRef} className="relative w-full h-full bg-background overflow-hidden flex flex-col border border-white/5 rounded-lg">
+             {/* Top/Bottom Tab + Bottom Outline Controls */}
+             <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 bg-card/80 backdrop-blur-md p-2 rounded-xl border border-white/10">
+                <div className="flex gap-1">
+                    <Button
+                        variant={activeTab === 'top' ? 'default' : 'ghost'}
+                        size="sm"
+                        className={`text-xs ${activeTab === 'top' ? '' : 'text-white/70'}`}
+                        onClick={() => setActiveTab('top')}
+                    >
+                        上面
+                    </Button>
+                    <Button
+                        variant={activeTab === 'bottom' ? 'default' : 'ghost'}
+                        size="sm"
+                        className={`text-xs ${activeTab === 'bottom' ? '' : 'text-white/70'}`}
+                        onClick={() => {
+                            setActiveTab('bottom');
+                            if (!useBottomOutline) setUseBottomOutline(true);
+                            // Initialize manual bottom outline from top if empty
+                            if (!autoBottomOutline && bottomOutlinePoints.length === 0 && outlinePoints.length > 0) {
+                                setBottomOutlinePoints(outlinePoints.map(p => ({ ...p })));
+                            }
+                        }}
+                    >
+                        底面
+                    </Button>
+                </div>
+                {activeTab === 'bottom' && (
+                    <div className="flex flex-col gap-1.5 pt-1 border-t border-white/10">
+                        <label className="flex items-center gap-1.5 text-[10px] text-white/70 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={useBottomOutline}
+                                onChange={(e) => setUseBottomOutline(e.target.checked)}
+                                className="rounded"
+                            />
+                            底面輪郭を分離
+                        </label>
+                        {useBottomOutline && (
+                            <div className="flex gap-1">
+                                <Button
+                                    variant={autoBottomOutline ? 'default' : 'ghost'}
+                                    size="sm"
+                                    className="text-[10px] h-6 px-2"
+                                    onClick={() => setAutoBottomOutline(true)}
+                                >
+                                    自動
+                                </Button>
+                                <Button
+                                    variant={!autoBottomOutline ? 'default' : 'ghost'}
+                                    size="sm"
+                                    className="text-[10px] h-6 px-2"
+                                    onClick={() => {
+                                        setAutoBottomOutline(false);
+                                        // Copy auto-computed or top outline as starting point
+                                        if (bottomOutlinePoints.length === 0) {
+                                            const source = autoBottomPoints.length > 0 ? autoBottomPoints : outlinePoints;
+                                            setBottomOutlinePoints(source.map(p => ({ ...p })));
+                                        }
+                                    }}
+                                >
+                                    手動
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                )}
+             </div>
+
              {/* Toolbar */}
              <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 bg-card/80 backdrop-blur-md p-2 rounded-xl border border-white/10">
                 <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k * 1.2}))} title="拡大"><ZoomIn className="h-4 w-4"/></Button>
@@ -305,10 +405,37 @@ export default function OutlineEditorCanvas() {
                             </g>
                         )}
 
-                        <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke={isImageEditMode ? "#ffffff" : "#14b8a6"} strokeWidth={2 / transform.k} vectorEffect="non-scaling-stroke" opacity={isImageEditMode ? 0.3 : 1} />
-                        {!isImageEditMode && outlinePoints.map((p, i) => (
-                            <circle key={i} cx={p.x} cy={p.y} r={draggingIndex === i ? 8/transform.k : 4/transform.k} fill={draggingIndex === i ? "#ffffff" : "#14b8a6"} stroke="#ffffff" strokeWidth={1/transform.k} className="cursor-move transition-all hover:r-6" onMouseDown={(e) => handleMouseDown(i, e)} />
-                        ))}
+                        {/* Top outline */}
+                        {!isBottomTab && (
+                            <>
+                                <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke={isImageEditMode ? "#ffffff" : "#14b8a6"} strokeWidth={2 / transform.k} vectorEffect="non-scaling-stroke" opacity={isImageEditMode ? 0.3 : 1} />
+                                {!isImageEditMode && outlinePoints.map((p, i) => (
+                                    <circle key={i} cx={p.x} cy={p.y} r={draggingIndex === i ? 8/transform.k : 4/transform.k} fill={draggingIndex === i ? "#ffffff" : "#14b8a6"} stroke="#ffffff" strokeWidth={1/transform.k} className="cursor-move transition-all hover:r-6" onMouseDown={(e) => handleMouseDown(i, e)} />
+                                ))}
+                            </>
+                        )}
+                        {/* Bottom tab: show top outline as reference + bottom outline as editable */}
+                        {isBottomTab && useBottomOutline && (
+                            <>
+                                {/* Reference top outline (faded) */}
+                                <path d={topPathDForReference} fill="none" stroke="#14b8a6" strokeWidth={1 / transform.k} strokeDasharray={`${4/transform.k} ${3/transform.k}`} opacity={0.3} />
+                                {/* Bottom outline */}
+                                {editablePoints.length > 0 && (
+                                    <>
+                                        <path d={bottomPathD} fill="rgba(249, 115, 22, 0.1)" stroke="#f97316" strokeWidth={2 / transform.k} vectorEffect="non-scaling-stroke" />
+                                        {!isReadOnly && editablePoints.map((p, i) => (
+                                            <circle key={i} cx={p.x} cy={p.y} r={draggingIndex === i ? 8/transform.k : 4/transform.k} fill={draggingIndex === i ? "#ffffff" : "#f97316"} stroke="#ffffff" strokeWidth={1/transform.k} className="cursor-move transition-all hover:r-6" onMouseDown={(e) => handleMouseDown(i, e)} />
+                                        ))}
+                                        {isReadOnly && editablePoints.filter((_, i) => i % 5 === 0).map((p, i) => (
+                                            <circle key={i} cx={p.x} cy={p.y} r={3/transform.k} fill="#f97316" opacity={0.5} />
+                                        ))}
+                                    </>
+                                )}
+                            </>
+                        )}
+                        {isBottomTab && !useBottomOutline && (
+                            <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke="#14b8a6" strokeWidth={2 / transform.k} opacity={0.5} />
+                        )}
                     </g>
                 </svg>
             </div>

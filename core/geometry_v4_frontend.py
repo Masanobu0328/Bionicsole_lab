@@ -1073,6 +1073,100 @@ def _resample_outline_heel_region(outline, x_min, x_max, target_spacing_mm=0.5,
 
 
 # =============================================================================
+# ユーティリティ: 輪郭のリサンプル（点数合わせ）
+# =============================================================================
+
+def _resample_to_match(outline: np.ndarray, target_count: int) -> np.ndarray:
+    """Resample a closed outline to have exactly target_count points."""
+    n = len(outline)
+    if n == target_count:
+        return outline
+
+    # Compute cumulative arc length
+    diffs = np.diff(outline, axis=0)
+    seg_lengths = np.sqrt(np.sum(diffs**2, axis=1))
+    cum_length = np.concatenate([[0], np.cumsum(seg_lengths)])
+    total_length = cum_length[-1]
+    if total_length <= 0:
+        return outline[:target_count] if n >= target_count else outline
+
+    # Interpolate at evenly spaced arc lengths
+    target_lengths = np.linspace(0, total_length, target_count, endpoint=False)
+    from scipy.interpolate import interp1d
+    fx = interp1d(cum_length, outline[:, 0], kind='linear', fill_value='extrapolate')
+    fy = interp1d(cum_length, outline[:, 1], kind='linear', fill_value='extrapolate')
+    return np.column_stack([fx(target_lengths), fy(target_lengths)])
+
+
+# =============================================================================
+# 底面輪郭の自動計算
+# =============================================================================
+
+def _compute_auto_bottom_outline(
+    outline: np.ndarray,
+    arch_settings: dict,
+    offset_mm: float = 5.0
+) -> np.ndarray:
+    """Compute bottom outline by offsetting medial side inward in arch region.
+
+    Args:
+        outline: Top outline points (N, 2) array
+        arch_settings: Dict with medial_start, medial_end, medial_peak (percentages)
+        offset_mm: Maximum inward offset in mm for medial side
+
+    Returns:
+        Bottom outline (N, 2) array with medial arch region pulled inward
+    """
+    if arch_settings is None:
+        return outline.copy()
+
+    f_y_min, f_y_max, x_min, x_max = get_outline_y_bounds(outline)
+    foot_length = x_max - x_min
+    if foot_length <= 0:
+        return outline.copy()
+
+    medial_start = arch_settings.get('medial_start', 15.0)
+    medial_end = arch_settings.get('medial_end', 70.0)
+    medial_peak = arch_settings.get('medial_peak', 43.0)
+
+    bottom = outline.copy()
+
+    for i in range(len(bottom)):
+        x, y = bottom[i]
+        x_ratio = (x - x_min) / foot_length * 100.0
+
+        # Only affect medial side in arch region
+        if x_ratio < medial_start or x_ratio > medial_end:
+            continue
+
+        # Check if this point is on the medial (high Y) side
+        y_max_at_x = float(f_y_max(x))
+        y_min_at_x = float(f_y_min(x))
+        width_at_x = y_max_at_x - y_min_at_x
+        if width_at_x <= 0:
+            continue
+
+        # Only affect points near the medial edge (top 20% of width)
+        medial_threshold = y_max_at_x - width_at_x * 0.2
+        if y < medial_threshold:
+            continue
+
+        # Smoothstep blend: 0 at start/end, 1 at peak
+        if x_ratio <= medial_peak:
+            t = (x_ratio - medial_start) / max(medial_peak - medial_start, 0.01)
+        else:
+            t = (medial_end - x_ratio) / max(medial_end - medial_peak, 0.01)
+        t = max(0.0, min(1.0, t))
+        # Smoothstep
+        blend = t * t * (3.0 - 2.0 * t)
+
+        # Offset inward (decrease Y for medial side)
+        bottom[i, 1] = y - offset_mm * blend
+
+    return bottom
+
+
+# =============================================================================
 # メッシュ生成
 # =============================================================================
 
@@ -1088,11 +1182,12 @@ def generate_insole_mesh(
     landmark_settings: dict = None,
     wall_params: dict = None,
     heel_cup_height: float = None,
-    arch_curves: dict = None
+    arch_curves: dict = None,
+    bottom_outline: np.ndarray = None
 ) -> trimesh.Trimesh:
     print(f"[INFO] === MasaCAD v4.3 (Frontend) ===")
     if heel_cup_height: heel_cup_scale = heel_cup_height / HEEL_CUP_PROFILE.get(0.0, 1.8)
-    
+
     if np.allclose(outline[0], outline[-1]): outline = outline[:-1]
     outline = _resample_outline_heel_region(
         outline, outline[:, 0].min(), outline[:, 0].max()
@@ -1108,7 +1203,20 @@ def generate_insole_mesh(
     if arch_pad_funcs:
         profiles['arch_pad_functions'] = arch_pad_funcs
 
-    # Grid
+    # Process bottom outline if provided
+    has_bottom_outline = bottom_outline is not None and len(bottom_outline) > 0
+    if has_bottom_outline:
+        if np.allclose(bottom_outline[0], bottom_outline[-1]):
+            bottom_outline = bottom_outline[:-1]
+        bottom_outline = _resample_outline_heel_region(
+            bottom_outline, bottom_outline[:, 0].min(), bottom_outline[:, 0].max()
+        )
+        # Ensure same point count as top outline by resampling to match
+        if len(bottom_outline) != n_boundary:
+            bottom_outline = _resample_to_match(bottom_outline, n_boundary)
+        print(f"[INFO] Bottom outline: {len(bottom_outline)} points (separate from top)")
+
+    # Grid (use top outline = wider)
     outline_path = MplPath(outline)
     x_vals = np.arange(x_min + grid_spacing, x_max, grid_spacing)
     y_global_min, y_global_max = outline[:,1].min(), outline[:,1].max()
@@ -1118,12 +1226,12 @@ def generate_insole_mesh(
         xx, yy = np.meshgrid(x_vals, y_vals)
         cands = np.column_stack([xx.ravel(), yy.ravel()])
         interior_points = cands[outline_path.contains_points(cands)]
-    
+
     all_2d = np.vstack([outline, interior_points]) if len(interior_points) > 0 else outline
     n_total = len(all_2d)
     is_boundary_flags = np.zeros(n_total, dtype=bool)
     is_boundary_flags[:n_boundary] = True
-    
+
     top_vertices = []
     for i, pt in enumerate(all_2d):
         x, y = pt
@@ -1141,28 +1249,127 @@ def generate_insole_mesh(
     if _smooth_window % 2 == 0:
         _smooth_window += 1
     top_vertices = _smooth_boundary_z(top_vertices, n_boundary, x_min, x_max, window=_smooth_window)
-    bottom_vertices = np.column_stack([all_2d, np.zeros(n_total)])
-    
-    tri = Delaunay(all_2d)
-    valid_faces = [f for f in tri.simplices if point_in_polygon(all_2d[f].mean(axis=0), outline)]
-    top_faces = np.array(valid_faces)
-    
-    bottom_faces = top_faces[:, [0, 2, 1]] + n_total
-    side_faces = []
-    for i in range(n_boundary):
-        ni = (i + 1) % n_boundary
-        side_faces.append([i, i+n_total, ni])
-        side_faces.append([ni, i+n_total, ni+n_total])
-    side_faces = np.array(side_faces)
-    
-    all_verts = np.vstack([top_vertices, bottom_vertices])
-    all_faces = np.vstack([top_faces, bottom_faces, side_faces])
+
+    if not has_bottom_outline:
+        # Original behavior: bottom uses same XY as top, Z=0
+        bottom_vertices = np.column_stack([all_2d, np.zeros(n_total)])
+
+        tri = Delaunay(all_2d)
+        valid_faces = [f for f in tri.simplices if point_in_polygon(all_2d[f].mean(axis=0), outline)]
+        top_faces = np.array(valid_faces)
+
+        bottom_faces = top_faces[:, [0, 2, 1]] + n_total
+        side_faces = []
+        for i in range(n_boundary):
+            ni = (i + 1) % n_boundary
+            side_faces.append([i, i+n_total, ni])
+            side_faces.append([ni, i+n_total, ni+n_total])
+        side_faces = np.array(side_faces)
+
+        all_verts = np.vstack([top_vertices, bottom_vertices])
+        all_faces = np.vstack([top_faces, bottom_faces, side_faces])
+    else:
+        # Separate bottom outline: bottom boundary uses bottom_outline XY, Z=0
+        # Interior points: filter by bottom outline
+        bottom_outline_path = MplPath(bottom_outline)
+        bottom_interior_mask = np.ones(len(interior_points), dtype=bool)
+        if len(interior_points) > 0:
+            bottom_interior_mask = bottom_outline_path.contains_points(interior_points)
+        bottom_interior = interior_points[bottom_interior_mask] if len(interior_points) > 0 else np.empty((0, 2))
+
+        n_bottom_boundary = len(bottom_outline)
+        bottom_all_2d = np.vstack([bottom_outline, bottom_interior]) if len(bottom_interior) > 0 else bottom_outline
+        n_bottom_total = len(bottom_all_2d)
+        bottom_vertices = np.column_stack([bottom_all_2d, np.zeros(n_bottom_total)])
+
+        # Top faces (Delaunay on top outline)
+        tri = Delaunay(all_2d)
+        valid_faces = [f for f in tri.simplices if point_in_polygon(all_2d[f].mean(axis=0), outline)]
+        top_faces = np.array(valid_faces)
+
+        # Bottom faces (Delaunay on bottom outline)
+        tri_bottom = Delaunay(bottom_all_2d)
+        valid_bottom = [f for f in tri_bottom.simplices if point_in_polygon(bottom_all_2d[f].mean(axis=0), bottom_outline)]
+        bottom_faces = np.array(valid_bottom)[:, [0, 2, 1]] + n_total  # offset by top vertex count
+
+        # Side walls with curved transition where top != bottom
+        N_MID = 5  # number of intermediate vertices for curved wall
+        side_verts = []
+        side_faces_list = []
+        mid_base_idx = n_total + n_bottom_total  # start index for mid vertices
+
+        for i in range(n_boundary):
+            ni = (i + 1) % n_boundary
+
+            top_xy_i = outline[i]
+            top_xy_ni = outline[ni]
+            bot_xy_i = bottom_outline[i]
+            bot_xy_ni = bottom_outline[ni]
+            top_z_i = float(top_vertices[i, 2])
+            top_z_ni = float(top_vertices[ni, 2])
+
+            dist_i = np.sqrt(np.sum((top_xy_i - bot_xy_i)**2))
+            dist_ni = np.sqrt(np.sum((top_xy_ni - bot_xy_ni)**2))
+
+            if dist_i < 0.01 and dist_ni < 0.01:
+                # No difference: simple vertical wall
+                top_i = i
+                top_ni = ni
+                bot_i = n_total + i
+                bot_ni = n_total + ni
+                side_faces_list.append([top_i, bot_i, top_ni])
+                side_faces_list.append([top_ni, bot_i, bot_ni])
+            else:
+                # Curved wall: generate intermediate vertices with quarter-circle profile
+                mid_idx_start = mid_base_idx + len(side_verts)
+                # For edge i: N_MID intermediate verts
+                for k in range(N_MID):
+                    t = (k + 1) / (N_MID + 1)
+                    # Quarter-circle: XY follows sin, Z follows cos
+                    xy_i = bot_xy_i + (top_xy_i - bot_xy_i) * np.sin(t * np.pi / 2)
+                    z_i = top_z_i * (1.0 - np.cos(t * np.pi / 2))
+                    side_verts.append([xy_i[0], xy_i[1], z_i])
+                # For edge ni: N_MID intermediate verts
+                for k in range(N_MID):
+                    t = (k + 1) / (N_MID + 1)
+                    xy_ni = bot_xy_ni + (top_xy_ni - bot_xy_ni) * np.sin(t * np.pi / 2)
+                    z_ni = top_z_ni * (1.0 - np.cos(t * np.pi / 2))
+                    side_verts.append([xy_ni[0], xy_ni[1], z_ni])
+
+                # Build triangle strip between edge i and edge ni
+                # Vertex indices for the strip:
+                # strip_i = [bot_i, mid_i_0, mid_i_1, ..., mid_i_{N-1}, top_i]
+                # strip_ni = [bot_ni, mid_ni_0, ..., mid_ni_{N-1}, top_ni]
+                strip_i = [n_total + i]
+                for k in range(N_MID):
+                    strip_i.append(mid_idx_start + k)
+                strip_i.append(i)
+
+                strip_ni = [n_total + ni]
+                for k in range(N_MID):
+                    strip_ni.append(mid_idx_start + N_MID + k)
+                strip_ni.append(ni)
+
+                # Triangle strip between the two edge strips
+                for s in range(len(strip_i) - 1):
+                    side_faces_list.append([strip_i[s], strip_ni[s], strip_i[s+1]])
+                    side_faces_list.append([strip_i[s+1], strip_ni[s], strip_ni[s+1]])
+
+        side_faces = np.array(side_faces_list)
+
+        # Combine all vertices and faces
+        all_verts_list = [top_vertices, bottom_vertices]
+        if len(side_verts) > 0:
+            all_verts_list.append(np.array(side_verts))
+        all_verts = np.vstack(all_verts_list)
+        all_faces = np.vstack([top_faces, bottom_faces, side_faces])
+
     mesh = trimesh.Trimesh(vertices=all_verts, faces=all_faces)
-    
+
     mesh.fix_normals()
     mesh.fill_holes()
     mesh.merge_vertices()
-    
+
     # Smoothing
     try:
         interior_indices = list(range(n_boundary, n_total))
@@ -1178,7 +1385,7 @@ def generate_insole_mesh(
             v[:, 2] = new_z
             mesh.vertices = v
     except: pass
-    
+
     return mesh
 
 
@@ -1197,7 +1404,8 @@ def generate_insole_from_outline(
     wall_params: dict = None,
     heel_cup_height: float = None,
     arch_curves: dict = None,
-    progress_callback: callable = None
+    progress_callback: callable = None,
+    bottom_outline_points: Optional[List[Dict[str, float]]] = None
 ) -> trimesh.Trimesh:
     log_debug("Frontend Gen Called")
 
@@ -1212,6 +1420,16 @@ def generate_insole_from_outline(
     else:
         raise ValueError("No outline provided")
 
+    # Process bottom outline points
+    bottom_outline_np = None
+    if bottom_outline_points:
+        bottom_outline_np = np.array([[p['x'], p['y']] for p in bottom_outline_points])
+        if flip_x: bottom_outline_np[:, 0] = bottom_outline_np[:, 0].max() - bottom_outline_np[:, 0]
+        if flip_y: bottom_outline_np[:, 1] = bottom_outline_np[:, 1].max() - bottom_outline_np[:, 1]
+        bottom_outline_np[:, 0] -= bottom_outline_np[:, 0].min()
+        bottom_outline_np[:, 1] -= bottom_outline_np[:, 1].min()
+        print(f"[INFO] Bottom outline provided: {len(bottom_outline_np)} points")
+
     return generate_insole_mesh(
         outline=outline_np,
         base_thickness=base_thickness,
@@ -1224,7 +1442,8 @@ def generate_insole_from_outline(
         landmark_settings=landmark_settings,
         wall_params=wall_params,
         heel_cup_height=heel_cup_height,
-        arch_curves=arch_curves
+        arch_curves=arch_curves,
+        bottom_outline=bottom_outline_np
     )
 
 def export_mesh(mesh: trimesh.Trimesh, output_path: Path):

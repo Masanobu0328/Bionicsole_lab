@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { generateInsole, getDownloadUrl, getTaskStatus, resolveApiUrl } from '@/lib/api';
+import { computeAutoBottomOutline } from '@/lib/geometry-utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw } from 'lucide-react';
@@ -34,6 +35,10 @@ export default function PreviewStep() {
         latticeCellSize,
         strutRadius,
         setCurrentStep,
+        // Bottom outline
+        bottomOutlinePoints,
+        useBottomOutline,
+        autoBottomOutline,
     } = useStore();
 
     // Compute selectedPatient from patients and patientId
@@ -88,6 +93,16 @@ export default function PreviewStep() {
                 ...widthConfig,
             };
 
+            // Compute bottom outline points if enabled
+            let bottomPoints: { x: number; y: number }[] | undefined;
+            if (useBottomOutline) {
+                if (autoBottomOutline) {
+                    bottomPoints = computeAutoBottomOutline(outlinePoints, selectedSettings);
+                } else if (bottomOutlinePoints.length > 0) {
+                    bottomPoints = bottomOutlinePoints;
+                }
+            }
+
             const response = await generateInsole({
                 patient_id: patientId,
                 foot_side: side,
@@ -106,7 +121,8 @@ export default function PreviewStep() {
                 strut_radius: strutRadius,
                 outline_points: outlinePoints,
                 landmark_config: mergedLandmarkConfig,
-                arch_curves: archCurves || undefined
+                arch_curves: archCurves || undefined,
+                bottom_outline_points: bottomPoints
             });
 
             const taskId = response.task_id;

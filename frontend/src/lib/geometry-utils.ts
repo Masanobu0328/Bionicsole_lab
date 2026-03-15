@@ -221,6 +221,71 @@ export function getBounds(points: {x: number, y: number}[]) {
     return { minX, maxX, minY, maxY, width: maxX - minX, height: maxY - minY };
 }
 
+/**
+ * Compute bottom outline by offsetting the medial side inward in the arch region.
+ * Mirrors the Python _compute_auto_bottom_outline() logic.
+ */
+export function computeAutoBottomOutline(
+    outlinePoints: { x: number; y: number }[],
+    archSettings: { medial_start: number; medial_end: number; medial_peak: number },
+    offsetMm: number = 5.0
+): { x: number; y: number }[] {
+    if (outlinePoints.length < 3) return [...outlinePoints];
+
+    const bounds = getBounds(outlinePoints);
+    const footLength = bounds.maxX - bounds.minX;
+    if (footLength <= 0) return outlinePoints.map(p => ({ ...p }));
+
+    const { medial_start, medial_end, medial_peak } = archSettings;
+
+    // Build Y bounds lookup (sample at many X positions)
+    const nSamples = 200;
+    const yMaxAtX: number[] = [];
+    const sampleXs: number[] = [];
+    for (let s = 0; s < nSamples; s++) {
+        const sx = bounds.minX + (footLength * s) / (nSamples - 1);
+        sampleXs.push(sx);
+        const yBounds = getOutlineYAtX(outlinePoints, sx);
+        yMaxAtX.push(yBounds ? yBounds.max : bounds.maxY);
+    }
+
+    // Helper to get interpolated yMax at any x
+    const getYMax = (x: number): number => {
+        const idx = ((x - bounds.minX) / footLength) * (nSamples - 1);
+        const i0 = Math.max(0, Math.min(nSamples - 2, Math.floor(idx)));
+        const t = idx - i0;
+        return yMaxAtX[i0] * (1 - t) + yMaxAtX[i0 + 1] * t;
+    };
+
+    return outlinePoints.map(p => {
+        const xRatio = ((p.x - bounds.minX) / footLength) * 100;
+
+        if (xRatio < medial_start || xRatio > medial_end) {
+            return { ...p };
+        }
+
+        const yMaxHere = getYMax(p.x);
+        const yBounds = getOutlineYAtX(outlinePoints, p.x);
+        const widthHere = yBounds ? (yBounds.max - yBounds.min) : (bounds.maxY - bounds.minY);
+        if (widthHere <= 0) return { ...p };
+
+        const medialThreshold = yMaxHere - widthHere * 0.2;
+        if (p.y < medialThreshold) return { ...p };
+
+        // Smoothstep blend
+        let t: number;
+        if (xRatio <= medial_peak) {
+            t = (xRatio - medial_start) / Math.max(medial_peak - medial_start, 0.01);
+        } else {
+            t = (medial_end - xRatio) / Math.max(medial_end - medial_peak, 0.01);
+        }
+        t = Math.max(0, Math.min(1, t));
+        const blend = t * t * (3 - 2 * t);
+
+        return { x: p.x, y: p.y - offsetMm * blend };
+    });
+}
+
 // Helper to get Y intersection bounds of polygon at X
 export function getOutlineYAtX(points: {x: number, y: number}[], targetX: number) {
     let intersections: number[] = [];

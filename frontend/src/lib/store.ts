@@ -46,6 +46,11 @@ type State = {
     outlinePoints: { x: number; y: number }[];
     outlineScale: number; // Pixels per mm or similar reference
 
+    // Bottom Outline State
+    bottomOutlinePoints: { x: number; y: number }[];
+    useBottomOutline: boolean;
+    autoBottomOutline: boolean;
+
     // Landmarks State (Percentages along X-axis 0-100)
     landmarkConfig: Record<string, number>;
     // Width Guidelines State (Percentages along Y-axis 0=Lateral, 100=Medial)
@@ -64,6 +69,9 @@ type State = {
     setOutlineImageSize: (size: { width: number; height: number }) => void;
     setOutlinePoints: (points: { x: number; y: number }[]) => void;
     setOutlineScale: (scale: number) => void;
+    setBottomOutlinePoints: (points: { x: number; y: number }[]) => void;
+    setUseBottomOutline: (val: boolean) => void;
+    setAutoBottomOutline: (val: boolean) => void;
     setLandmarkConfig: (config: Record<string, number>) => void;
     updateLandmarkPos: (id: string, percent: number) => void;
     setWidthConfig: (config: Record<string, number>) => void;
@@ -128,6 +136,9 @@ type PatientPreset = {
         outlineImageTransform: { x: number; y: number; scale: number; rotation: number; opacity: number; flipX: boolean; flipY: boolean };
         outlineImageSize: { width: number; height: number };
         outlineImage: string | null;
+        bottomOutlinePoints: { x: number; y: number }[];
+        useBottomOutline: boolean;
+        autoBottomOutline: boolean;
     };
 };
 
@@ -213,6 +224,9 @@ export const useStore = create<State>((set, get) => ({
     outlineImageSize: { width: 100, height: 100 },
     outlinePoints: [], // Will be initialized by the editor
     outlineScale: 1.0,
+    bottomOutlinePoints: [],
+    useBottomOutline: false,
+    autoBottomOutline: true,
     // Default Landmarks from Streamlit app
     landmarkConfig: {
         'arch_start': 15.0,
@@ -252,6 +266,9 @@ export const useStore = create<State>((set, get) => ({
     setOutlineImageSize: (size) => set({ outlineImageSize: size }),
     setOutlinePoints: (points) => set({ outlinePoints: points }),
     setOutlineScale: (scale) => set({ outlineScale: scale }),
+    setBottomOutlinePoints: (points) => set({ bottomOutlinePoints: points }),
+    setUseBottomOutline: (val) => set({ useBottomOutline: val }),
+    setAutoBottomOutline: (val) => set({ autoBottomOutline: val }),
     setLandmarkConfig: (config) => set({ landmarkConfig: config }),
     updateLandmarkPos: (id, percent) => set((state) => ({
         landmarkConfig: { ...state.landmarkConfig, [id]: percent }
@@ -342,6 +359,9 @@ export const useStore = create<State>((set, get) => ({
                 outlineImageTransform: state.outlineImageTransform,
                 outlineImageSize: state.outlineImageSize,
                 outlineImage: state.outlineImage,
+                bottomOutlinePoints: state.bottomOutlinePoints,
+                useBottomOutline: state.useBottomOutline,
+                autoBottomOutline: state.autoBottomOutline,
             },
         };
 
@@ -385,6 +405,9 @@ export const useStore = create<State>((set, get) => ({
                 outlineImageTransform: p.outlineImageTransform ?? { x: 0, y: 0, scale: 1, rotation: 0, opacity: 0.5, flipX: false, flipY: false },
                 outlineImageSize: p.outlineImageSize ?? { width: 100, height: 100 },
                 outlineImage: p.outlineImage ?? null,
+                bottomOutlinePoints: p.bottomOutlinePoints ?? [],
+                useBottomOutline: p.useBottomOutline ?? false,
+                autoBottomOutline: p.autoBottomOutline ?? true,
             });
             return true;
         } catch {

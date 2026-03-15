@@ -62,6 +62,9 @@ export type InsoleParams = {
     outline_points?: { x: number; y: number }[];
     landmark_config?: Record<string, number>;
     arch_curves?: ArchCurves;
+
+    // Bottom outline (separate from top outline for arch region)
+    bottom_outline_points?: { x: number; y: number }[];
 };
 
 export type CurvePoint = { x: number; y: number };

@@ -121,6 +121,9 @@ class InsoleParams(BaseModel):
     landmark_config: Optional[Dict[str, float]] = None
     arch_curves: Optional[ArchCurves] = None
 
+    # Bottom outline (separate from top outline for arch region)
+    bottom_outline_points: Optional[List[Dict[str, float]]] = None
+
 class Patient(BaseModel):
     id: str
     name: str # Might just be ID if no name file
@@ -192,7 +195,8 @@ def generate_insole_worker(task_id: str, params: InsoleParams):
             wall_params=wall_params,
             heel_cup_height=params.heel_cup_height,
             arch_curves=arch_curves_dict,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            bottom_outline_points=params.bottom_outline_points
         )
         
         # Mirror mesh for right foot.

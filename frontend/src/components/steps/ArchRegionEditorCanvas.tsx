@@ -73,8 +73,54 @@ export default function ArchRegionEditorCanvas() {
     const [draggingCurve, setDraggingCurve] = useState<'medial' | 'lateral' | 'transverse' | 'medialFlat' | 'lateralFlat' | 'heelBridge' | 'lateralBridge' | 'metatarsalBridge' | null>(null);
     const [draggingPointIdx, setDraggingPointIdx] = useState<number | null>(null);
     const [isDraggingWholeCurve, setIsDraggingWholeCurve] = useState(false);
+    const [localCurves, setLocalCurves] = useState<ArchCurves | null>(archCurves);
+
+    const localCurvesRef = useRef<ArchCurves | null>(archCurves);
+    const isDraggingRef = useRef(false);
+    const archCurvesRef = useRef<ArchCurves | null>(archCurves);
+    const draggingCurveRef = useRef<typeof draggingCurve>(null);
+    const draggingPointIdxRef = useRef<number | null>(null);
+    const isDraggingWholeCurveRef = useRef(false);
+    const isPanningRef = useRef(false);
+    const lastPanPosRef = useRef({ x: 0, y: 0 });
+    const transformRef = useRef(transform);
 
     const bounds = useMemo(() => getBounds(outlinePoints), [outlinePoints]);
+
+    useEffect(() => {
+        archCurvesRef.current = archCurves;
+    }, [archCurves]);
+
+    useEffect(() => {
+        transformRef.current = transform;
+    }, [transform]);
+
+    useEffect(() => {
+        draggingCurveRef.current = draggingCurve;
+    }, [draggingCurve]);
+
+    useEffect(() => {
+        draggingPointIdxRef.current = draggingPointIdx;
+    }, [draggingPointIdx]);
+
+    useEffect(() => {
+        isDraggingWholeCurveRef.current = isDraggingWholeCurve;
+    }, [isDraggingWholeCurve]);
+
+    useEffect(() => {
+        isPanningRef.current = isPanning;
+    }, [isPanning]);
+
+    useEffect(() => {
+        lastPanPosRef.current = lastPanPos;
+    }, [lastPanPos]);
+
+    useEffect(() => {
+        if (!isDraggingRef.current) {
+            setLocalCurves(archCurves);
+            localCurvesRef.current = archCurves;
+        }
+    }, [archCurves]);
 
     // Sync arch curve positions to archSettings (medial_end + transverse_start/peak/end)
     const syncArchSettings = React.useCallback((curves: { medial?: CurvePoint[], transverse?: CurvePoint[] }) => {
@@ -228,6 +274,7 @@ export default function ArchRegionEditorCanvas() {
 
     // --- Initialization ---
     useEffect(() => {
+        if (isDraggingRef.current) return;
         if (outlinePoints.length > 0) {
             const medialPoints = (archCurves && archCurves.medial.length > 0) ? archCurves.medial : generateInitialCurve('medial');
             const lateralPoints = (archCurves && archCurves.lateral.length > 0) ? archCurves.lateral : generateInitialCurve('lateral');
@@ -282,6 +329,8 @@ export default function ArchRegionEditorCanvas() {
                     metatarsalBridge: metatarsalBridgePoints,
                 };
                 setArchCurves(initialCurves);
+                setLocalCurves(initialCurves);
+                localCurvesRef.current = initialCurves;
                 // Sync arch settings on initial generation
                 syncArchSettings({ transverse: transversePoints, medial: medialPoints });
             }
@@ -536,12 +585,16 @@ export default function ArchRegionEditorCanvas() {
     };
 
     const resetTransverse = () => {
-        if (!archCurves) return;
+        const currentCurves = localCurvesRef.current ?? archCurvesRef.current;
+        if (!currentCurves) return;
         const newTransverse = generateInitialCurve('transverse');
-        setArchCurves({
-            ...archCurves,
+        const nextCurves = {
+            ...currentCurves,
             transverse: newTransverse
-        });
+        };
+        setLocalCurves(nextCurves);
+        localCurvesRef.current = nextCurves;
+        setArchCurves(nextCurves);
         syncTransverseToArchSettings(newTransverse);
     };
 
@@ -571,15 +624,17 @@ export default function ArchRegionEditorCanvas() {
         if (!CTM) return { x: 0, y: 0 };
         const rawX = (e.clientX - CTM.e) / CTM.a;
         const rawY = (e.clientY - CTM.f) / CTM.d;
+        const currentTransform = transformRef.current;
         return {
-            x: (rawX - transform.x) / transform.k,
-            y: (rawY - transform.y) / transform.k
+            x: (rawX - currentTransform.x) / currentTransform.k,
+            y: (rawY - currentTransform.y) / currentTransform.k
         };
     };
 
     const handleMouseDownPoint = (e: React.MouseEvent, type: 'medial' | 'lateral' | 'transverse' | 'medialFlat' | 'lateralFlat' | 'heelBridge' | 'lateralBridge' | 'metatarsalBridge', idx: number) => {
         e.stopPropagation();
-        if (!archCurves) return;
+        const currentCurves = localCurvesRef.current ?? archCurvesRef.current;
+        if (!currentCurves) return;
 
         // Transverse/TransverseFlat: All points movable
         // MedialFlat/LateralFlat: All points movable (Endpoints will be snapped to outline)
@@ -591,7 +646,7 @@ export default function ArchRegionEditorCanvas() {
 
         if (isSolidArch || isBridge) {
             // @ts-ignore
-            const len = archCurves[type]?.length || 0;
+            const len = currentCurves[type]?.length || 0;
             // medial: M0(start) fixed, MB1(end) draggable
             // lateral/bridges: both endpoints fixed
             if (type === 'medial') {
@@ -604,46 +659,64 @@ export default function ArchRegionEditorCanvas() {
         setDraggingCurve(type);
         setDraggingPointIdx(idx);
         setIsDraggingWholeCurve(false);
+        draggingCurveRef.current = type;
+        draggingPointIdxRef.current = idx;
+        isDraggingWholeCurveRef.current = false;
+        isDraggingRef.current = true;
+        localCurvesRef.current = currentCurves;
     };
 
     const handleMouseDownCurve = (e: React.MouseEvent, type: 'medial' | 'lateral' | 'transverse' | 'medialFlat' | 'lateralFlat' | 'heelBridge' | 'lateralBridge' | 'metatarsalBridge') => {
         // Only allow whole drag for transverse
         if (type === 'transverse') {
+            const currentCurves = localCurvesRef.current ?? archCurvesRef.current;
+            if (!currentCurves) return;
             e.stopPropagation();
             setDraggingCurve(type);
             setDraggingPointIdx(null);
             setIsDraggingWholeCurve(true);
+            draggingCurveRef.current = type;
+            draggingPointIdxRef.current = null;
+            isDraggingWholeCurveRef.current = true;
+            isDraggingRef.current = true;
+            localCurvesRef.current = currentCurves;
         }
     };
 
     const handlePanStart = (e: React.MouseEvent) => {
-        if (draggingCurve) return;
+        if (isDraggingRef.current) return;
+        isPanningRef.current = true;
         setIsPanning(true);
-        setLastPanPos({ x: e.clientX, y: e.clientY });
+        const nextPanPos = { x: e.clientX, y: e.clientY };
+        lastPanPosRef.current = nextPanPos;
+        setLastPanPos(nextPanPos);
     };
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
+            const currentDraggingCurve = draggingCurveRef.current;
+            const currentDraggingIdx = draggingPointIdxRef.current;
+            const isWhole = isDraggingWholeCurveRef.current;
+            const curCurves = localCurvesRef.current;
+            const curTransform = transformRef.current;
             const pos = getLogicalPos(e);
 
-            if (draggingCurve && archCurves) {
-                const newCurves = { ...archCurves };
+            if (currentDraggingCurve && curCurves) {
+                const newCurves = { ...curCurves };
                 // @ts-ignore
-                const points = [...newCurves[draggingCurve]];
+                const points = [...newCurves[currentDraggingCurve]];
 
-                if (isDraggingWholeCurve) {
-                    // Move all points
-                    const dx = e.movementX / transform.k;
-                    const dy = e.movementY / transform.k;
+                if (isWhole) {
+                    const dx = e.movementX / curTransform.k;
+                    const dy = e.movementY / curTransform.k;
 
                     for (let i = 0; i < points.length; i++) {
                         points[i] = { x: points[i].x + dx, y: points[i].y + dy };
                     }
                     // @ts-ignore
-                    newCurves[draggingCurve] = points;
+                    newCurves[currentDraggingCurve] = points;
 
-                    // Sync bridges when whole-dragging transverse
-                    if (draggingCurve === 'transverse') {
+                    if (currentDraggingCurve === 'transverse') {
                         if (newCurves.lateralBridge && newCurves.lateralBridge.length >= 3 && points.length >= 5) {
                             const bridgePoints = [...newCurves.lateralBridge];
                             bridgePoints[bridgePoints.length - 1] = { ...points[4] };
@@ -656,34 +729,25 @@ export default function ArchRegionEditorCanvas() {
                         }
                     }
 
-                    setArchCurves(newCurves);
-
-                } else if (draggingPointIdx !== null) {
-                    // Move single point
-
-                    // Constrain Flat Endpoints to Outline
-                    // medialFlat mF0 (start): snap to outline
-                    // medialFlat mF5 (end): slides along M7→MB1 segment
-                    // lateralFlat: snap both endpoints to outline
-                    const isMedialFlatStart = draggingCurve === 'medialFlat' && draggingPointIdx === 0;
-                    const isMedialFlatEnd = draggingCurve === 'medialFlat' && draggingPointIdx === points.length - 1;
-                    const isLateralFlatEnd = draggingCurve === 'lateralFlat' && (draggingPointIdx === 0 || draggingPointIdx === points.length - 1);
+                    localCurvesRef.current = newCurves;
+                    setLocalCurves(newCurves);
+                } else if (currentDraggingIdx !== null) {
+                    const isMedialFlatStart = currentDraggingCurve === 'medialFlat' && currentDraggingIdx === 0;
+                    const isMedialFlatEnd = currentDraggingCurve === 'medialFlat' && currentDraggingIdx === points.length - 1;
+                    const isLateralFlatEnd = currentDraggingCurve === 'lateralFlat' && (currentDraggingIdx === 0 || currentDraggingIdx === points.length - 1);
                     if (isMedialFlatStart) {
                         const yBounds = getOutlineYAtX(outlinePoints, pos.x);
                         if (yBounds) pos.y = yBounds.min;
                     } else if (isMedialFlatEnd) {
-                        // mF4: slide along the M7→MB1 segment (metatarsalBridge[2] → metatarsalBridge[1])
                         const bridge = newCurves.metatarsalBridge;
                         if (bridge && bridge.length >= 3) {
-                            const m7  = bridge[2]; // M7
-                            const mb1 = bridge[1]; // MB1
+                            const m7 = bridge[2];
+                            const mb1 = bridge[1];
                             const dx = mb1.x - m7.x;
                             const dy = mb1.y - m7.y;
                             const lenSq = dx * dx + dy * dy;
                             if (lenSq > 0) {
-                                const t = Math.max(0, Math.min(1,
-                                    ((pos.x - m7.x) * dx + (pos.y - m7.y) * dy) / lenSq
-                                ));
+                                const t = Math.max(0, Math.min(1, ((pos.x - m7.x) * dx + (pos.y - m7.y) * dy) / lenSq));
                                 pos.x = m7.x + t * dx;
                                 pos.y = m7.y + t * dy;
                             }
@@ -693,30 +757,26 @@ export default function ArchRegionEditorCanvas() {
                         if (yBounds) pos.y = yBounds.max;
                     }
 
-                    points[draggingPointIdx] = { x: pos.x, y: pos.y };
+                    points[currentDraggingIdx] = { x: pos.x, y: pos.y };
                     // @ts-ignore
-                    newCurves[draggingCurve] = points;
+                    newCurves[currentDraggingCurve] = points;
 
-                    // If dragging solid curve (medial/lateral/transverse), auto-update the corresponding flat curve
-                    if (draggingCurve === 'medial') {
+                    if (currentDraggingCurve === 'medial') {
                         newCurves.medialFlat = generateMedialFlatCustom(points);
-                        // Sync metatarsalBridge[1] (MB1) to medial arch end
                         if (newCurves.metatarsalBridge && newCurves.metatarsalBridge.length >= 3 && points.length >= 7) {
                             const mbPoints = [...newCurves.metatarsalBridge];
-                            mbPoints[1] = { ...points[points.length - 1] }; // MB1 tracks medial arch end
+                            mbPoints[1] = { ...points[points.length - 1] };
                             newCurves.metatarsalBridge = mbPoints;
                         }
-                    } else if (draggingCurve === 'lateral') {
+                    } else if (currentDraggingCurve === 'lateral') {
                         newCurves.lateralFlat = createFlatCurve(points, 1);
-                    } else if (draggingCurve === 'transverse') {
-                        newCurves.transverseFlat = createFlatCurve(points, 1, true);  // isClosed=true for polygon
-                        // Sync lateralBridge endpoint to transverse[4]
+                    } else if (currentDraggingCurve === 'transverse') {
+                        newCurves.transverseFlat = createFlatCurve(points, 1, true);
                         if (newCurves.lateralBridge && newCurves.lateralBridge.length >= 3 && points.length >= 5) {
                             const bridgePoints = [...newCurves.lateralBridge];
                             bridgePoints[bridgePoints.length - 1] = { ...points[4] };
                             newCurves.lateralBridge = bridgePoints;
                         }
-                        // Sync metatarsalBridge start to transverse[2]
                         if (newCurves.metatarsalBridge && newCurves.metatarsalBridge.length >= 3 && points.length >= 3) {
                             const mbPoints = [...newCurves.metatarsalBridge];
                             mbPoints[0] = { ...points[2] };
@@ -724,25 +784,38 @@ export default function ArchRegionEditorCanvas() {
                         }
                     }
 
-                    setArchCurves(newCurves);
+                    localCurvesRef.current = newCurves;
+                    setLocalCurves(newCurves);
                 }
-            } else if (isPanning) {
+            } else if (isPanningRef.current) {
                 setTransform(t => ({
                     ...t,
-                    x: t.x + (e.clientX - lastPanPos.x),
-                    y: t.y + (e.clientY - lastPanPos.y)
+                    x: t.x + (e.clientX - lastPanPosRef.current.x),
+                    y: t.y + (e.clientY - lastPanPosRef.current.y)
                 }));
-                setLastPanPos({ x: e.clientX, y: e.clientY });
+                const nextPanPos = { x: e.clientX, y: e.clientY };
+                lastPanPosRef.current = nextPanPos;
+                setLastPanPos(nextPanPos);
             }
         };
+
         const handleMouseUp = () => {
-            // Sync arch settings when drag ends
-            if (draggingCurve === 'transverse' || draggingCurve === 'medial') {
-                syncArchSettings({
-                    transverse: archCurves?.transverse,
-                    medial: archCurves?.medial,
-                });
+            const currentDraggingCurve = draggingCurveRef.current;
+            const committedCurves = localCurvesRef.current;
+            if (isDraggingRef.current && committedCurves) {
+                setArchCurves(committedCurves);
+                if (currentDraggingCurve === 'transverse' || currentDraggingCurve === 'medial') {
+                    syncArchSettings({
+                        transverse: committedCurves.transverse,
+                        medial: committedCurves.medial,
+                    });
+                }
             }
+            draggingCurveRef.current = null;
+            draggingPointIdxRef.current = null;
+            isDraggingWholeCurveRef.current = false;
+            isDraggingRef.current = false;
+            isPanningRef.current = false;
             setDraggingCurve(null);
             setDraggingPointIdx(null);
             setIsDraggingWholeCurve(false);
@@ -755,7 +828,7 @@ export default function ArchRegionEditorCanvas() {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [draggingCurve, draggingPointIdx, isDraggingWholeCurve, isPanning, lastPanPos, transform, archCurves, syncArchSettings]);
+    }, [createFlatCurve, generateMedialFlatCustom, outlinePoints, setArchCurves, syncArchSettings]);
 
     // --- Rendering ---
     const outlineD = useMemo(() => getSmoothPath(outlinePoints, true), [outlinePoints]);
@@ -859,9 +932,9 @@ export default function ArchRegionEditorCanvas() {
 
     // Outline-following paths: M0→M7 (medial edge) and L0→L4 (lateral edge)
     const outlineEdgePaths = useMemo(() => {
-        if (!archCurves || outlinePoints.length === 0) return null;
-        const medial = archCurves.medial;
-        const lateral = archCurves.lateral;
+        if (!localCurves || outlinePoints.length === 0) return null;
+        const medial = localCurves.medial;
+        const lateral = localCurves.lateral;
         if (!medial || medial.length < 7 || !lateral || lateral.length < 5) return null;
 
         const numSteps = 30;
@@ -891,7 +964,7 @@ export default function ArchRegionEditorCanvas() {
             medial: getSmoothPath(medialEdge, false),
             lateral: getSmoothPath(lateralEdge, false),
         };
-    }, [archCurves, outlinePoints]);
+    }, [localCurves, outlinePoints]);
 
     const lmGuides = useMemo(() => {
         if (outlinePoints.length === 0) return [];
@@ -943,21 +1016,21 @@ export default function ArchRegionEditorCanvas() {
                             </g>
                         )}
 
-                        {archCurves && (
+                        {localCurves && (
                             <>
-                                {renderCurve(archCurves.medial, COLORS.medial_stroke, COLORS.medial_fill, 'medial')}
-                                {archCurves.medialFlat && renderCurve(archCurves.medialFlat, COLORS.medial_stroke, 'none', 'medialFlat', true)}
+                                {renderCurve(localCurves.medial, COLORS.medial_stroke, COLORS.medial_fill, 'medial')}
+                                {localCurves.medialFlat && renderCurve(localCurves.medialFlat, COLORS.medial_stroke, 'none', 'medialFlat', true)}
 
-                                {renderCurve(archCurves.lateral, COLORS.lateral_stroke, COLORS.lateral_fill, 'lateral')}
-                                {archCurves.lateralFlat && renderCurve(archCurves.lateralFlat, COLORS.lateral_stroke, 'none', 'lateralFlat', true)}
+                                {renderCurve(localCurves.lateral, COLORS.lateral_stroke, COLORS.lateral_fill, 'lateral')}
+                                {localCurves.lateralFlat && renderCurve(localCurves.lateralFlat, COLORS.lateral_stroke, 'none', 'lateralFlat', true)}
 
-                                {renderCurve(archCurves.transverse, COLORS.transverse_stroke, COLORS.transverse_fill, 'transverse')}
+                                {renderCurve(localCurves.transverse, COLORS.transverse_stroke, COLORS.transverse_fill, 'transverse')}
 
-                                {archCurves.heelBridge && renderCurve(archCurves.heelBridge, COLORS.bridge_stroke, 'none', 'heelBridge')}
-                                {archCurves.lateralBridge && renderCurve(archCurves.lateralBridge, COLORS.bridge_stroke, 'none', 'lateralBridge')}
+                                {localCurves.heelBridge && renderCurve(localCurves.heelBridge, COLORS.bridge_stroke, 'none', 'heelBridge')}
+                                {localCurves.lateralBridge && renderCurve(localCurves.lateralBridge, COLORS.bridge_stroke, 'none', 'lateralBridge')}
                                 {/* metatarsalBridge: render M7 (bridge[2]) as fixed reference point */}
-                                {archCurves.metatarsalBridge && archCurves.metatarsalBridge.length >= 3 && (() => {
-                                    const mb = archCurves.metatarsalBridge;
+                                {localCurves.metatarsalBridge && localCurves.metatarsalBridge.length >= 3 && (() => {
+                                    const mb = localCurves.metatarsalBridge;
                                     const labels = CP_LABELS['metatarsalBridge'];
                                     // M7 (bridge[2]): standalone arch pad outline point, fixed
                                     const m7p = mb[2];
@@ -978,13 +1051,13 @@ export default function ArchRegionEditorCanvas() {
                                 })()}
 
                                 {/* T4→T3→T2→MB1→M7 combined smooth line */}
-                                {archCurves.transverse && archCurves.transverse.length >= 5 && archCurves.metatarsalBridge && archCurves.metatarsalBridge.length >= 3 && (() => {
+                                {localCurves.transverse && localCurves.transverse.length >= 5 && localCurves.metatarsalBridge && localCurves.metatarsalBridge.length >= 3 && (() => {
                                     const pts = [
-                                        archCurves.transverse[4],
-                                        archCurves.transverse[3],
-                                        archCurves.transverse[2],
-                                        archCurves.metatarsalBridge[1], // MB1
-                                        archCurves.metatarsalBridge[2], // M7
+                                        localCurves.transverse[4],
+                                        localCurves.transverse[3],
+                                        localCurves.transverse[2],
+                                        localCurves.metatarsalBridge[1], // MB1
+                                        localCurves.metatarsalBridge[2], // M7
                                     ];
                                     const d = getSmoothPath(pts, false);
                                     return <path d={d} fill="none" stroke={COLORS.bridge_stroke} strokeWidth={1.5 / transform.k} strokeLinecap="round" opacity={0.7} className="pointer-events-none" />;
