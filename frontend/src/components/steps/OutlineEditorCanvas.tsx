@@ -28,6 +28,14 @@ export default function OutlineEditorCanvas() {
 
     const [activeTab, setActiveTab] = useState<OutlineTab>('top');
 
+    // Auto-simplify to ~30 points when entering the editor (re-editing mode)
+    useEffect(() => {
+        if (outlinePoints.length > 40) {
+            setOutlinePoints(simplifyToCount(outlinePoints, 30));
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // Compute auto bottom outline when in auto mode
     const autoBottomPoints = useMemo(() => {
         if (!useBottomOutline || !autoBottomOutline || outlinePoints.length < 3) return [];
@@ -321,15 +329,6 @@ export default function OutlineEditorCanvas() {
                             title="粗め (~30点)"
                         >
                             粗
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-[9px] text-white/70 hover:text-white h-6 px-1"
-                            onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 60))}
-                            title="普通 (~60点)"
-                        >
-                            中
                         </Button>
                         <Button
                             variant="ghost"

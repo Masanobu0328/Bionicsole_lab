@@ -94,8 +94,8 @@ export default function PreviewStep() {
             };
 
             // Densify outline for smooth mesh generation (control points -> smooth curve)
-            // subdivisions=6: 50pt -> 300pt, 30pt -> 180pt. Backend further densifies heel region.
-            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 6);
+            // subdivisions=10: 30pt -> 300pt, gives enough resolution for smooth arch walls.
+            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 10);
 
             // Compute bottom outline points if enabled
             let bottomPoints: { x: number; y: number }[] | undefined;
@@ -104,7 +104,7 @@ export default function PreviewStep() {
                     // Compute from dense outline for accurate offset
                     bottomPoints = computeAutoBottomOutline(denseOutlinePoints, selectedSettings);
                 } else if (bottomOutlinePoints.length > 0) {
-                    bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 6);
+                    bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 10);
                 }
             }
 
