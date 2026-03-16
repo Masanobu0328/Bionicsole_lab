@@ -19,6 +19,7 @@ export default function OutlineEditorCanvas() {
         setOutlinePoints,
         bottomOutlinePoints,
         setBottomOutlinePoints,
+        useBottomOutline,
         setUseBottomOutline,
     } = useStore();
 
