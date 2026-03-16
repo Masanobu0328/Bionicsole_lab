@@ -49,7 +49,6 @@ type State = {
     // Bottom Outline State
     bottomOutlinePoints: { x: number; y: number }[];
     useBottomOutline: boolean;
-    autoBottomOutline: boolean;
 
     // Landmarks State (Percentages along X-axis 0-100)
     landmarkConfig: Record<string, number>;
@@ -71,7 +70,6 @@ type State = {
     setOutlineScale: (scale: number) => void;
     setBottomOutlinePoints: (points: { x: number; y: number }[]) => void;
     setUseBottomOutline: (val: boolean) => void;
-    setAutoBottomOutline: (val: boolean) => void;
     setLandmarkConfig: (config: Record<string, number>) => void;
     updateLandmarkPos: (id: string, percent: number) => void;
     setWidthConfig: (config: Record<string, number>) => void;
@@ -138,7 +136,6 @@ type PatientPreset = {
         outlineImage: string | null;
         bottomOutlinePoints: { x: number; y: number }[];
         useBottomOutline: boolean;
-        autoBottomOutline: boolean;
     };
 };
 
@@ -225,8 +222,7 @@ export const useStore = create<State>((set, get) => ({
     outlinePoints: [], // Will be initialized by the editor
     outlineScale: 1.0,
     bottomOutlinePoints: [],
-    useBottomOutline: false,
-    autoBottomOutline: true,
+    useBottomOutline: true,
     // Default Landmarks from Streamlit app
     landmarkConfig: {
         'arch_start': 15.0,
@@ -252,7 +248,19 @@ export const useStore = create<State>((set, get) => ({
     setPatients: (list) => set({ patients: list }),
     setCurrentStep: (step) => set({ currentStep: step }),
     setPatientId: (id) => {
-        set({ patientId: id });
+        // Reset all per-patient editable state before loading preset.
+        // This prevents old patient's data from bleeding into a new patient
+        // that has no saved preset (loadPatientPreset returns false → nothing updates).
+        set({
+            patientId: id,
+            outlinePoints: [],
+            bottomOutlinePoints: [],
+            useBottomOutline: true,
+            archCurves: null,
+            currentModelUrl: null,
+            outlineImage: null,
+            outlineImageTransform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 0.5, flipX: false, flipY: false },
+        });
         // Auto-load existing preset when patient changes.
         get().loadPatientPreset(id);
     },
@@ -268,7 +276,6 @@ export const useStore = create<State>((set, get) => ({
     setOutlineScale: (scale) => set({ outlineScale: scale }),
     setBottomOutlinePoints: (points) => set({ bottomOutlinePoints: points }),
     setUseBottomOutline: (val) => set({ useBottomOutline: val }),
-    setAutoBottomOutline: (val) => set({ autoBottomOutline: val }),
     setLandmarkConfig: (config) => set({ landmarkConfig: config }),
     updateLandmarkPos: (id, percent) => set((state) => ({
         landmarkConfig: { ...state.landmarkConfig, [id]: percent }
@@ -361,7 +368,6 @@ export const useStore = create<State>((set, get) => ({
                 outlineImage: state.outlineImage,
                 bottomOutlinePoints: state.bottomOutlinePoints,
                 useBottomOutline: state.useBottomOutline,
-                autoBottomOutline: state.autoBottomOutline,
             },
         };
 
@@ -407,7 +413,6 @@ export const useStore = create<State>((set, get) => ({
                 outlineImage: p.outlineImage ?? null,
                 bottomOutlinePoints: p.bottomOutlinePoints ?? [],
                 useBottomOutline: p.useBottomOutline ?? false,
-                autoBottomOutline: p.autoBottomOutline ?? true,
             });
             return true;
         } catch {

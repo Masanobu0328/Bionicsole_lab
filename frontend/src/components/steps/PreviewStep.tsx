@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { generateInsole, getDownloadUrl, getTaskStatus, resolveApiUrl } from '@/lib/api';
-import { computeAutoBottomOutline, densifyClosedPolygon } from '@/lib/geometry-utils';
+import { densifyClosedPolygon } from '@/lib/geometry-utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw } from 'lucide-react';
@@ -38,7 +38,6 @@ export default function PreviewStep() {
         // Bottom outline
         bottomOutlinePoints,
         useBottomOutline,
-        autoBottomOutline,
     } = useStore();
 
     // Compute selectedPatient from patients and patientId
@@ -94,18 +93,13 @@ export default function PreviewStep() {
             };
 
             // Densify outline for smooth mesh generation (control points -> smooth curve)
-            // subdivisions=10: 30pt -> 300pt, gives enough resolution for smooth arch walls.
-            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 10);
+            // subdivisions=15: 30pt -> 450pt, gives enough resolution for smooth arch surface.
+            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 15);
 
             // Compute bottom outline points if enabled
             let bottomPoints: { x: number; y: number }[] | undefined;
-            if (useBottomOutline) {
-                if (autoBottomOutline) {
-                    // Compute from dense outline for accurate offset
-                    bottomPoints = computeAutoBottomOutline(denseOutlinePoints, selectedSettings);
-                } else if (bottomOutlinePoints.length > 0) {
-                    bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 10);
-                }
+            if (useBottomOutline && bottomOutlinePoints.length > 0) {
+                bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 15);
             }
 
             const response = await generateInsole({

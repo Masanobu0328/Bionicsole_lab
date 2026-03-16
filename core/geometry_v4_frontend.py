@@ -1098,6 +1098,52 @@ def _resample_to_match(outline: np.ndarray, target_count: int) -> np.ndarray:
     return np.column_stack([fx(target_lengths), fy(target_lengths)])
 
 
+def _resample_heel_region_paired(top_outline: np.ndarray, bottom_outline: np.ndarray,
+                                   x_min: float, x_max: float,
+                                   target_spacing_mm: float = 0.5,
+                                   heel_end_ratio: float = 30.0,
+                                   blend_ratio: float = 5.0):
+    """Resample BOTH top and bottom outlines using the SAME insertion pattern.
+
+    When N points are inserted between top[i] and top[i+1] in the heel region,
+    the same N points are inserted between bottom[i] and bottom[i+1] at the
+    same fractional positions. This preserves index correspondence: top[k] <-> bottom[k].
+    """
+    n = len(top_outline)
+    assert len(bottom_outline) == n, "Top and bottom must have the same number of points"
+    length = x_max - x_min
+    if length <= 0:
+        return top_outline, bottom_outline
+
+    new_top = []
+    new_bot = []
+    for i in range(n):
+        p0t = top_outline[i];    p1t = top_outline[(i + 1) % n]
+        p0b = bottom_outline[i]; p1b = bottom_outline[(i + 1) % n]
+        new_top.append(p0t)
+        new_bot.append(p0b)
+        # Use TOP outline segment to decide how many sub-points to insert
+        seg_len = np.sqrt(np.sum((p1t - p0t) ** 2))
+        mid_x = (p0t[0] + p1t[0]) / 2.0
+        x_ratio = (mid_x - x_min) / length * 100.0
+        if x_ratio <= heel_end_ratio:
+            desired_spacing = target_spacing_mm
+        elif x_ratio <= heel_end_ratio + blend_ratio:
+            t = (x_ratio - heel_end_ratio) / blend_ratio
+            desired_spacing = target_spacing_mm + t * (seg_len - target_spacing_mm)
+            desired_spacing = min(desired_spacing, seg_len)
+        else:
+            desired_spacing = seg_len
+        if desired_spacing < seg_len and desired_spacing > 0:
+            n_sub = int(np.ceil(seg_len / desired_spacing))
+            if n_sub > 1:
+                for j in range(1, n_sub):
+                    frac = j / n_sub
+                    new_top.append(p0t + frac * (p1t - p0t))
+                    new_bot.append(p0b + frac * (p1b - p0b))
+    return np.array(new_top), np.array(new_bot)
+
+
 # =============================================================================
 # 底面輪郭の自動計算
 # =============================================================================
@@ -1189,9 +1235,35 @@ def generate_insole_mesh(
     if heel_cup_height: heel_cup_scale = heel_cup_height / HEEL_CUP_PROFILE.get(0.0, 1.8)
 
     if np.allclose(outline[0], outline[-1]): outline = outline[:-1]
-    outline = _resample_outline_heel_region(
-        outline, outline[:, 0].min(), outline[:, 0].max()
-    )
+
+    # Process bottom outline if provided — BEFORE heel resampling so we can apply
+    # the same insertion pattern to both outlines simultaneously.
+    has_bottom_outline = bottom_outline is not None and len(bottom_outline) > 0
+    if has_bottom_outline:
+        if np.allclose(bottom_outline[0], bottom_outline[-1]):
+            bottom_outline = bottom_outline[:-1]
+        # Match point counts first (both should already be 450 from frontend densification)
+        if len(bottom_outline) != len(outline):
+            bottom_outline = _resample_to_match(bottom_outline, len(outline))
+        # Apply heel densification to BOTH outlines simultaneously with the SAME insertion pattern.
+        # This guarantees top[i] and bottom[i] always correspond to the same position on the insole.
+        x_min_pre = outline[:, 0].min()
+        x_max_pre = outline[:, 0].max()
+        outline, bottom_outline = _resample_heel_region_paired(
+            outline, bottom_outline, x_min_pre, x_max_pre
+        )
+        # Snap near-identical points to top to create clean vertical walls
+        SNAP_THRESHOLD = 1.0  # mm
+        diffs = np.sqrt(np.sum((bottom_outline - outline) ** 2, axis=1))
+        snap_mask = diffs < SNAP_THRESHOLD
+        bottom_outline[snap_mask] = outline[snap_mask]
+        n_snapped = int(snap_mask.sum())
+        print(f"[INFO] Bottom outline: {len(bottom_outline)} points (paired heel resample), {n_snapped} snapped to top")
+    else:
+        outline = _resample_outline_heel_region(
+            outline, outline[:, 0].min(), outline[:, 0].max()
+        )
+
     n_boundary = len(outline)
     profiles = create_profile_interpolators(arch_settings, landmark_settings, wall_params, arch_curves)
     f_y_min, f_y_max, x_min, x_max = get_outline_y_bounds(outline)
@@ -1202,19 +1274,6 @@ def generate_insole_mesh(
     arch_pad_funcs = _build_arch_pad_functions(custom_boundaries, f_y_min, f_y_max, raw_bridges=raw_bridges)
     if arch_pad_funcs:
         profiles['arch_pad_functions'] = arch_pad_funcs
-
-    # Process bottom outline if provided
-    has_bottom_outline = bottom_outline is not None and len(bottom_outline) > 0
-    if has_bottom_outline:
-        if np.allclose(bottom_outline[0], bottom_outline[-1]):
-            bottom_outline = bottom_outline[:-1]
-        bottom_outline = _resample_outline_heel_region(
-            bottom_outline, bottom_outline[:, 0].min(), bottom_outline[:, 0].max()
-        )
-        # Ensure same point count as top outline by resampling to match
-        if len(bottom_outline) != n_boundary:
-            bottom_outline = _resample_to_match(bottom_outline, n_boundary)
-        print(f"[INFO] Bottom outline: {len(bottom_outline)} points (separate from top)")
 
     # Grid (use top outline = wider)
     outline_path = MplPath(outline)
@@ -1292,83 +1351,30 @@ def generate_insole_mesh(
         valid_bottom = [f for f in tri_bottom.simplices if point_in_polygon(bottom_all_2d[f].mean(axis=0), bottom_outline)]
         bottom_faces = np.array(valid_bottom)[:, [0, 2, 1]] + n_total  # offset by top vertex count
 
-        # Side walls with curved transition where top != bottom
-        N_MID = 5  # number of intermediate vertices for curved wall
-        side_verts = []
+        # Side walls: simple quads connecting top boundary to bottom boundary.
+        # Each edge (i, i+1) produces 2 triangles forming a quad.
+        # No intermediate vertices — direct connection from bottom to top.
         side_faces_list = []
-        mid_base_idx = n_total + n_bottom_total  # start index for mid vertices
-
         for i in range(n_boundary):
             ni = (i + 1) % n_boundary
-
-            top_xy_i = outline[i]
-            top_xy_ni = outline[ni]
-            bot_xy_i = bottom_outline[i]
-            bot_xy_ni = bottom_outline[ni]
-            top_z_i = float(top_vertices[i, 2])
-            top_z_ni = float(top_vertices[ni, 2])
-
-            dist_i = np.sqrt(np.sum((top_xy_i - bot_xy_i)**2))
-            dist_ni = np.sqrt(np.sum((top_xy_ni - bot_xy_ni)**2))
-
-            if dist_i < 0.01 and dist_ni < 0.01:
-                # No difference: simple vertical wall
-                top_i = i
-                top_ni = ni
-                bot_i = n_total + i
-                bot_ni = n_total + ni
-                side_faces_list.append([top_i, bot_i, top_ni])
-                side_faces_list.append([top_ni, bot_i, bot_ni])
-            else:
-                # Curved wall: generate intermediate vertices with quarter-circle profile
-                mid_idx_start = mid_base_idx + len(side_verts)
-                # For edge i: N_MID intermediate verts
-                for k in range(N_MID):
-                    t = (k + 1) / (N_MID + 1)
-                    # Quarter-circle: XY follows sin, Z follows cos
-                    xy_i = bot_xy_i + (top_xy_i - bot_xy_i) * np.sin(t * np.pi / 2)
-                    z_i = top_z_i * (1.0 - np.cos(t * np.pi / 2))
-                    side_verts.append([xy_i[0], xy_i[1], z_i])
-                # For edge ni: N_MID intermediate verts
-                for k in range(N_MID):
-                    t = (k + 1) / (N_MID + 1)
-                    xy_ni = bot_xy_ni + (top_xy_ni - bot_xy_ni) * np.sin(t * np.pi / 2)
-                    z_ni = top_z_ni * (1.0 - np.cos(t * np.pi / 2))
-                    side_verts.append([xy_ni[0], xy_ni[1], z_ni])
-
-                # Build triangle strip between edge i and edge ni
-                # Vertex indices for the strip:
-                # strip_i = [bot_i, mid_i_0, mid_i_1, ..., mid_i_{N-1}, top_i]
-                # strip_ni = [bot_ni, mid_ni_0, ..., mid_ni_{N-1}, top_ni]
-                strip_i = [n_total + i]
-                for k in range(N_MID):
-                    strip_i.append(mid_idx_start + k)
-                strip_i.append(i)
-
-                strip_ni = [n_total + ni]
-                for k in range(N_MID):
-                    strip_ni.append(mid_idx_start + N_MID + k)
-                strip_ni.append(ni)
-
-                # Triangle strip between the two edge strips
-                for s in range(len(strip_i) - 1):
-                    side_faces_list.append([strip_i[s], strip_ni[s], strip_i[s+1]])
-                    side_faces_list.append([strip_i[s+1], strip_ni[s], strip_ni[s+1]])
+            top_i = i
+            top_ni = ni
+            bot_i = n_total + i
+            bot_ni = n_total + ni
+            side_faces_list.append([top_i, bot_i, top_ni])
+            side_faces_list.append([top_ni, bot_i, bot_ni])
 
         side_faces = np.array(side_faces_list)
 
         # Combine all vertices and faces
-        all_verts_list = [top_vertices, bottom_vertices]
-        if len(side_verts) > 0:
-            all_verts_list.append(np.array(side_verts))
-        all_verts = np.vstack(all_verts_list)
+        all_verts = np.vstack([top_vertices, bottom_vertices])
         all_faces = np.vstack([top_faces, bottom_faces, side_faces])
 
     mesh = trimesh.Trimesh(vertices=all_verts, faces=all_faces)
 
-    mesh.fix_normals()
-    mesh.fill_holes()
     mesh.merge_vertices()
+    mesh.fill_holes()
+    mesh.fix_normals()
 
     # Smoothing
     try:
@@ -1413,21 +1419,27 @@ def generate_insole_from_outline(
         outline_np = np.array([[p['x'], p['y']] for p in outline_points])
         if flip_x: outline_np[:, 0] = outline_np[:, 0].max() - outline_np[:, 0]
         if flip_y: outline_np[:, 1] = outline_np[:, 1].max() - outline_np[:, 1]
-        outline_np[:, 0] -= outline_np[:, 0].min()
-        outline_np[:, 1] -= outline_np[:, 1].min()
+        # Save offset before normalization (needed for bottom outline alignment)
+        top_x_offset = outline_np[:, 0].min()
+        top_y_offset = outline_np[:, 1].min()
+        outline_np[:, 0] -= top_x_offset
+        outline_np[:, 1] -= top_y_offset
     elif outline_csv_path:
         outline_np = load_outline_csv(outline_csv_path, flip_x=flip_x, flip_y=flip_y)
+        top_x_offset = 0.0
+        top_y_offset = 0.0
     else:
         raise ValueError("No outline provided")
 
-    # Process bottom outline points
+    # Process bottom outline points — use TOP outline's offset to keep alignment
     bottom_outline_np = None
     if bottom_outline_points:
         bottom_outline_np = np.array([[p['x'], p['y']] for p in bottom_outline_points])
         if flip_x: bottom_outline_np[:, 0] = bottom_outline_np[:, 0].max() - bottom_outline_np[:, 0]
         if flip_y: bottom_outline_np[:, 1] = bottom_outline_np[:, 1].max() - bottom_outline_np[:, 1]
-        bottom_outline_np[:, 0] -= bottom_outline_np[:, 0].min()
-        bottom_outline_np[:, 1] -= bottom_outline_np[:, 1].min()
+        # Use the SAME offset as the top outline to maintain alignment
+        bottom_outline_np[:, 0] -= top_x_offset
+        bottom_outline_np[:, 1] -= top_y_offset
         print(f"[INFO] Bottom outline provided: {len(bottom_outline_np)} points")
 
     return generate_insole_mesh(

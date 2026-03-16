@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useStore } from '@/lib/store';
-import { parseOutlineCsv, getSmoothPath, computeAutoBottomOutline, simplifyToCount } from '@/lib/geometry-utils';
+import { parseOutlineCsv, getSmoothPath, simplifyToCount } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,11 +19,7 @@ export default function OutlineEditorCanvas() {
         setOutlinePoints,
         bottomOutlinePoints,
         setBottomOutlinePoints,
-        useBottomOutline,
         setUseBottomOutline,
-        autoBottomOutline,
-        setAutoBottomOutline,
-        archSettingsRight,
     } = useStore();
 
     const [activeTab, setActiveTab] = useState<OutlineTab>('top');
@@ -36,18 +32,10 @@ export default function OutlineEditorCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Compute auto bottom outline when in auto mode
-    const autoBottomPoints = useMemo(() => {
-        if (!useBottomOutline || !autoBottomOutline || outlinePoints.length < 3) return [];
-        return computeAutoBottomOutline(outlinePoints, archSettingsRight);
-    }, [outlinePoints, archSettingsRight, useBottomOutline, autoBottomOutline]);
-
     // Active points for editing depend on tab
     const isBottomTab = activeTab === 'bottom';
-    const editablePoints = isBottomTab
-        ? (autoBottomOutline ? autoBottomPoints : bottomOutlinePoints)
-        : outlinePoints;
-    const isReadOnly = isBottomTab && autoBottomOutline;
+    const editablePoints = isBottomTab ? bottomOutlinePoints : outlinePoints;
+    const isReadOnly = false;
 
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -229,7 +217,7 @@ export default function OutlineEditorCanvas() {
 
     const bounds = getBounds();
     const pathD = getSmoothPath(outlinePoints, true);
-    const bottomPathD = useBottomOutline && editablePoints.length > 0 && isBottomTab
+    const bottomPathD = editablePoints.length > 0 && isBottomTab
         ? getSmoothPath(editablePoints, true) : '';
     const topPathDForReference = isBottomTab ? getSmoothPath(outlinePoints, true) : '';
 
@@ -260,8 +248,8 @@ export default function OutlineEditorCanvas() {
                         onClick={() => {
                             setActiveTab('bottom');
                             if (!useBottomOutline) setUseBottomOutline(true);
-                            // Initialize manual bottom outline from top if empty
-                            if (!autoBottomOutline && bottomOutlinePoints.length === 0 && outlinePoints.length > 0) {
+                            // Initialize bottom outline from top if empty
+                            if (bottomOutlinePoints.length === 0 && outlinePoints.length > 0) {
                                 setBottomOutlinePoints(outlinePoints.map(p => ({ ...p })));
                             }
                         }}
@@ -271,42 +259,15 @@ export default function OutlineEditorCanvas() {
                 </div>
                 {activeTab === 'bottom' && (
                     <div className="flex flex-col gap-1.5 pt-1 border-t border-white/10">
-                        <label className="flex items-center gap-1.5 text-[10px] text-white/70 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useBottomOutline}
-                                onChange={(e) => setUseBottomOutline(e.target.checked)}
-                                className="rounded"
-                            />
-                            底面輪郭を分離
-                        </label>
-                        {useBottomOutline && (
-                            <div className="flex gap-1">
-                                <Button
-                                    variant={autoBottomOutline ? 'default' : 'ghost'}
-                                    size="sm"
-                                    className="text-[10px] h-6 px-2"
-                                    onClick={() => setAutoBottomOutline(true)}
-                                >
-                                    自動
-                                </Button>
-                                <Button
-                                    variant={!autoBottomOutline ? 'default' : 'ghost'}
-                                    size="sm"
-                                    className="text-[10px] h-6 px-2"
-                                    onClick={() => {
-                                        setAutoBottomOutline(false);
-                                        // Copy auto-computed or top outline as starting point
-                                        if (bottomOutlinePoints.length === 0) {
-                                            const source = autoBottomPoints.length > 0 ? autoBottomPoints : outlinePoints;
-                                            setBottomOutlinePoints(source.map(p => ({ ...p })));
-                                        }
-                                    }}
-                                >
-                                    手動
-                                </Button>
-                            </div>
-                        )}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-[10px] h-6 px-2 text-white/60 hover:text-white"
+                            onClick={() => setBottomOutlinePoints(outlinePoints.map(p => ({ ...p })))}
+                            title="底面を上面と同じ形にリセット"
+                        >
+                            上面にリセット
+                        </Button>
                     </div>
                 )}
              </div>
@@ -448,7 +409,7 @@ export default function OutlineEditorCanvas() {
                             </>
                         )}
                         {/* Bottom tab: show top outline as reference + bottom outline as editable */}
-                        {isBottomTab && useBottomOutline && (
+                        {isBottomTab && (
                             <>
                                 {/* Reference top outline (faded) */}
                                 <path d={topPathDForReference} fill="none" stroke="#14b8a6" strokeWidth={1 / transform.k} strokeDasharray={`${4/transform.k} ${3/transform.k}`} opacity={0.3} />
@@ -465,9 +426,6 @@ export default function OutlineEditorCanvas() {
                                     </>
                                 )}
                             </>
-                        )}
-                        {isBottomTab && !useBottomOutline && (
-                            <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke="#14b8a6" strokeWidth={2 / transform.k} opacity={0.5} />
                         )}
                     </g>
                 </svg>

@@ -699,17 +699,17 @@ export default function ArchRegionEditorCanvas() {
             const isWhole = isDraggingWholeCurveRef.current;
             const curCurves = localCurvesRef.current;
             const curTransform = transformRef.current;
-            const pos = getLogicalPos(e);
 
             if (currentDraggingCurve && curCurves) {
                 const newCurves = { ...curCurves };
                 // @ts-ignore
                 const points = [...newCurves[currentDraggingCurve]];
 
-                if (isWhole) {
-                    const dx = e.movementX / curTransform.k;
-                    const dy = e.movementY / curTransform.k;
+                // Delta-based movement: use movementX/Y (browser-computed, always accurate)
+                const dx = e.movementX / curTransform.k;
+                const dy = e.movementY / curTransform.k;
 
+                if (isWhole) {
                     for (let i = 0; i < points.length; i++) {
                         points[i] = { x: points[i].x + dx, y: points[i].y + dy };
                     }
@@ -732,32 +732,37 @@ export default function ArchRegionEditorCanvas() {
                     localCurvesRef.current = newCurves;
                     setLocalCurves(newCurves);
                 } else if (currentDraggingIdx !== null) {
+                    // Compute new absolute position from current point + delta
+                    let newX = points[currentDraggingIdx].x + dx;
+                    let newY = points[currentDraggingIdx].y + dy;
+
+                    // Apply constraints using computed absolute position
                     const isMedialFlatStart = currentDraggingCurve === 'medialFlat' && currentDraggingIdx === 0;
                     const isMedialFlatEnd = currentDraggingCurve === 'medialFlat' && currentDraggingIdx === points.length - 1;
                     const isLateralFlatEnd = currentDraggingCurve === 'lateralFlat' && (currentDraggingIdx === 0 || currentDraggingIdx === points.length - 1);
                     if (isMedialFlatStart) {
-                        const yBounds = getOutlineYAtX(outlinePoints, pos.x);
-                        if (yBounds) pos.y = yBounds.min;
+                        const yBounds = getOutlineYAtX(outlinePoints, newX);
+                        if (yBounds) newY = yBounds.min;
                     } else if (isMedialFlatEnd) {
                         const bridge = newCurves.metatarsalBridge;
                         if (bridge && bridge.length >= 3) {
                             const m7 = bridge[2];
                             const mb1 = bridge[1];
-                            const dx = mb1.x - m7.x;
-                            const dy = mb1.y - m7.y;
-                            const lenSq = dx * dx + dy * dy;
+                            const bx = mb1.x - m7.x;
+                            const by = mb1.y - m7.y;
+                            const lenSq = bx * bx + by * by;
                             if (lenSq > 0) {
-                                const t = Math.max(0, Math.min(1, ((pos.x - m7.x) * dx + (pos.y - m7.y) * dy) / lenSq));
-                                pos.x = m7.x + t * dx;
-                                pos.y = m7.y + t * dy;
+                                const t = Math.max(0, Math.min(1, ((newX - m7.x) * bx + (newY - m7.y) * by) / lenSq));
+                                newX = m7.x + t * bx;
+                                newY = m7.y + t * by;
                             }
                         }
                     } else if (isLateralFlatEnd) {
-                        const yBounds = getOutlineYAtX(outlinePoints, pos.x);
-                        if (yBounds) pos.y = yBounds.max;
+                        const yBounds = getOutlineYAtX(outlinePoints, newX);
+                        if (yBounds) newY = yBounds.max;
                     }
 
-                    points[currentDraggingIdx] = { x: pos.x, y: pos.y };
+                    points[currentDraggingIdx] = { x: newX, y: newY };
                     // @ts-ignore
                     newCurves[currentDraggingCurve] = points;
 
@@ -885,7 +890,7 @@ export default function ArchRegionEditorCanvas() {
                                 fill={isFixed ? COLORS.point_fixed : (isPointActive ? COLORS.point_active : COLORS.point_base)}
                                 stroke={isFixed ? 'none' : color}
                                 strokeWidth={2 / transform.k}
-                                className={isFixed ? "cursor-not-allowed" : "cursor-move hover:scale-125 transition-transform"}
+                                className={isFixed ? "cursor-not-allowed" : "cursor-move"}
                                 onMouseDown={(e) => handleMouseDownPoint(e, type, i)}
                             />
                             {showLabels && label && (
