@@ -1,7 +1,11 @@
 fastapi
 uvicorn
 pydantic
+python-dotenv
 numpy
 pandas
 trimesh
 scipy
+supabase
+python-jose[cryptography]
+httpx

@@ -4,6 +4,10 @@
 fastapi>=0.100.0
 uvicorn>=0.23.0
 pydantic>=2.0.0
+python-dotenv>=1.0.0
+supabase>=2.0.0
+python-jose[cryptography]>=3.3.0
+httpx>=0.24.0
 
 # Core - Mesh Processing
 trimesh>=3.21.0

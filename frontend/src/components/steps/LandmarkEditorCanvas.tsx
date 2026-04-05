@@ -280,6 +280,7 @@ export default function LandmarkEditorCanvas() {
                         {Object.entries(landmarkConfig).map(([id, percent], index) => {
                             const def = LANDMARK_DEFS[id] || { label: id, side: 'full' };
                             const xPos = bounds.minX + (bounds.width * percent / 100);
+                            if (!isFinite(xPos)) return null;
                             const isActive = activeLandmarkId === id, isDragging = draggingId === id;
                             const displayColor = (isActive || isDragging) ? COLORS.active : COLORS.landmark_base;
 

@@ -1,10 +1,14 @@
+import os
 import sys
 from pathlib import Path
 
-# Add project root to sys.path
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +32,6 @@ app.add_middleware(
 )
 
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
 app.include_router(api_router, prefix="/api/v1")
 
@@ -43,6 +46,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

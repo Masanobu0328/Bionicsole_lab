@@ -1,16 +1,14 @@
 'use client';
 
-import React, { useEffect, useState, ChangeEvent } from 'react';
+import React, { useState, ChangeEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Download, Loader2, Upload, ChevronRight, ChevronLeft, CheckCircle2 } from 'lucide-react';
+import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { useStore, STEPS } from '@/lib/store';
-import { getPatients, generateInsole, getTaskStatus, Patient } from '@/lib/api';
 import { parseOutlineCsv } from '@/lib/geometry-utils';
 import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 
@@ -30,7 +28,7 @@ export default function Sidebar() {
     const store = useStore();
     const {
         currentStep, setCurrentStep,
-        patients, setPatients,
+        patients,
         patientId, setPatientId,
         footSide, setFootSide,
         flipOrientation, setFlipOrientation,
@@ -64,21 +62,6 @@ export default function Sidebar() {
         stlUrl, setStlUrl,
         setLatticeInfo,
     } = store;
-
-    useEffect(() => {
-        async function loadPatients() {
-            try {
-                const data = await getPatients();
-                setPatients(data);
-                if (data.length > 0 && !patientId) {
-                    setPatientId(data[0].id);
-                }
-            } catch (error) {
-                console.error('Failed to load patients:', error);
-            }
-        }
-        loadPatients();
-    }, [patientId, setPatientId]);
 
     const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -270,7 +253,8 @@ export default function Sidebar() {
                     </div>
                 );
             case STEPS.ARCH_HEIGHT: // Step 6
-                const currentSettings = activeFootSide === 'right' ? archSettingsRight : archSettingsLeft;
+                const rawSettings = activeFootSide === 'right' ? archSettingsRight : archSettingsLeft;
+                const currentSettings = rawSettings ?? { medial_height: 0, transverse_height: 0, lateral_height: 0 };
                 
                 return (
                     <div className="space-y-6">

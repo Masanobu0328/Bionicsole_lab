@@ -41,3 +41,9 @@ node_modules/
 
 # Exports (STL files)
 exports/*.stl
+
+# Spec files containing API keys
+SUPABASE_IMPL_SPEC.md
+
+# Backend environment secrets
+backend/.env
