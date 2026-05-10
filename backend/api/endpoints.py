@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.api.auth import get_current_practitioner_optional
@@ -18,8 +18,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.geometry_v4_frontend import generate_insole_from_outline
-from core.xcell_3d import apply_3d_xcell_lattice
+from core.geometry_v4_frontend import generate_insole_from_outline  # noqa: E402
+from core.outline_extract import extract_outline_from_image  # noqa: E402
+from core.xcell_3d import apply_3d_xcell_lattice  # noqa: E402
 
 router = APIRouter()
 
@@ -115,7 +116,7 @@ class InsoleParams(BaseModel):
     enable_lattice: bool = False
     lattice_cell_size: float = 3.0
     strut_radius: float = 0.2
-    outline_points: Optional[List[Dict[str, float]]] = None
+    outline_points: List[Dict[str, float]]
     landmark_config: Optional[Dict[str, float]] = None
     arch_curves: Optional[ArchCurves] = None
     bottom_outline_points: Optional[List[Dict[str, float]]] = None
@@ -222,11 +223,8 @@ def generate_insole_worker(
         print(f"[DEBUG] Arch Curves: {params.arch_curves}")
         print("[DEBUG] ================================")
 
-        patients_dir = PROJECT_ROOT / "patients"
-        outline_csv_path = patients_dir / params.patient_id / "outline.csv"
-
-        if not params.outline_points and not outline_csv_path.exists():
-            raise Exception("Patient outline not found")
+        if not params.outline_points:
+            raise Exception("Patient outline points are required")
 
         flip_x = params.flip_orientation
         flip_y = False
@@ -250,7 +248,6 @@ def generate_insole_worker(
         arch_curves_dict = params.arch_curves.model_dump() if params.arch_curves else None
 
         mesh = generate_insole_from_outline(
-            outline_csv_path=outline_csv_path if not params.outline_points else None,
             outline_points=params.outline_points,
             flip_x=flip_x,
             flip_y=flip_y,
@@ -362,6 +359,29 @@ async def generate_insole(
     task_id = task_manager.create_task()
     background_tasks.add_task(generate_insole_worker, task_id, params, practitioner_id)
     return {"task_id": task_id}
+
+
+@router.post("/extract-outline")
+async def extract_outline(
+    image: UploadFile = File(...),
+    target_length_mm: float = Form(...),
+    num_points: int = Form(120),
+):
+    try:
+        result = extract_outline_from_image(
+            image.file,
+            target_length_mm=target_length_mm,
+            num_points=num_points,
+            auto_orient=False,
+        )
+        return {
+            "outline_points": result.outline_points,
+            "preview_png": result.preview_png,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Outline extraction failed: {exc}") from exc
 
 
 @router.get("/tasks/{task_id}")

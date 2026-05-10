@@ -1,7 +1,8 @@
-import React, { useRef, useState, useEffect, useMemo } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
-import { parseOutlineCsv, getSmoothPath, simplifyToCount } from '@/lib/geometry-utils';
-import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
+import { getSmoothPath, simplifyToCount } from '@/lib/geometry-utils';
+import { extractOutlineFromImage } from '@/lib/api';
+import { renderTransformedImageBlob } from '@/lib/image-transform';
 import { ZoomIn, ZoomOut, Maximize, Image as ImageIcon, FlipHorizontal, FlipVertical, Plus, Minus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
@@ -17,6 +18,7 @@ export default function OutlineEditorCanvas() {
         setOutlineImageTransform,
         outlinePoints,
         setOutlinePoints,
+        outlineTargetLengthMm,
         bottomOutlinePoints,
         setBottomOutlinePoints,
         useBottomOutline,
@@ -36,7 +38,8 @@ export default function OutlineEditorCanvas() {
     // Active points for editing depend on tab
     const isBottomTab = activeTab === 'bottom';
     const editablePoints = isBottomTab ? bottomOutlinePoints : outlinePoints;
-    const isReadOnly = false;
+    const hasOutline = outlinePoints.length > 0;
+    const isReadOnly = !hasOutline;
 
     const svgRef = useRef<SVGSVGElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -46,6 +49,7 @@ export default function OutlineEditorCanvas() {
     const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
     const [isPanning, setIsPanning] = useState(false);
     const [lastPanPos, setLastPanPos] = useState({ x: 0, y: 0 });
+    const [isExtractingOutline, setIsExtractingOutline] = useState(false);
 
     // Modes
     const [isImageEditMode, setIsImageEditMode] = useState(false);
@@ -75,6 +79,7 @@ export default function OutlineEditorCanvas() {
             const img = new Image();
             img.onload = () => {
                 setOutlineImageSize({ width: img.naturalWidth / 5, height: img.naturalHeight / 5 });
+                setIsImageEditMode(true);
             };
             img.src = outlineImage;
         }
@@ -99,7 +104,7 @@ export default function OutlineEditorCanvas() {
     });
 
     const handleMouseDown = (index: number, e: React.MouseEvent) => {
-        if (isImageEditMode || isReadOnly) return;
+        if (!hasOutline || isImageEditMode || isReadOnly) return;
         e.preventDefault(); e.stopPropagation();
         setDraggingIndex(index);
     };
@@ -140,6 +145,29 @@ export default function OutlineEditorCanvas() {
     const toggleFlipX = () => setOutlineImageTransform({ flipX: !outlineImageTransform.flipX });
     const toggleFlipY = () => setOutlineImageTransform({ flipY: !outlineImageTransform.flipY });
     const scaleImage = (delta: number) => setOutlineImageTransform({ scale: outlineImageTransform.scale * delta });
+
+    const handleExtractOutline = async () => {
+        if (!outlineImage || isExtractingOutline) return;
+        if (outlinePoints.length > 0 && !window.confirm('既存の輪郭を上書きします。よろしいですか？')) {
+            return;
+        }
+
+        setIsExtractingOutline(true);
+        try {
+            const transformedImage = await renderTransformedImageBlob(outlineImage, outlineImageTransform);
+            const result = await extractOutlineFromImage(transformedImage, outlineTargetLengthMm, 120);
+            setOutlinePoints(result.outline_points);
+            setBottomOutlinePoints([]);
+            setUseBottomOutline(false);
+            setActiveTab('top');
+            setIsImageEditMode(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '輪郭抽出に失敗しました';
+            window.alert(message);
+        } finally {
+            setIsExtractingOutline(false);
+        }
+    };
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -200,11 +228,6 @@ export default function OutlineEditorCanvas() {
         return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
     }, [draggingIndex, outlinePoints, setOutlinePoints, isPanning, isResizingImage, isRotating, lastPanPos, transform, isImageEditMode, outlineImage, outlineImageTransform, outlineImageSize, setOutlineImageTransform]);
 
-    // Initial Setup
-    useEffect(() => {
-        if (outlinePoints.length === 0) setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, 260, 50));
-    }, []);
-
     useEffect(() => {
         const timer = setTimeout(fitView, 100);
         return () => clearTimeout(timer);
@@ -246,6 +269,7 @@ export default function OutlineEditorCanvas() {
                         variant={activeTab === 'bottom' ? 'default' : 'ghost'}
                         size="sm"
                         className={`text-xs ${activeTab === 'bottom' ? '' : 'text-white/70'}`}
+                        disabled={!hasOutline}
                         onClick={() => {
                             setActiveTab('bottom');
                             if (!useBottomOutline) setUseBottomOutline(true);
@@ -275,9 +299,9 @@ export default function OutlineEditorCanvas() {
 
              {/* Toolbar */}
              <div className="absolute top-4 right-4 z-10 flex flex-col gap-2 bg-card/80 backdrop-blur-md p-2 rounded-xl border border-white/10">
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k * 1.2}))} title="拡大"><ZoomIn className="h-4 w-4"/></Button>
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k / 1.2}))} title="縮小"><ZoomOut className="h-4 w-4"/></Button>
-                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={fitView} title="全体表示"><Maximize className="h-4 w-4"/></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k * 1.2}))} disabled={!hasOutline} title="拡大"><ZoomIn className="h-4 w-4"/></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={() => setTransform(t => ({...t, k: t.k / 1.2}))} disabled={!hasOutline} title="縮小"><ZoomOut className="h-4 w-4"/></Button>
+                <Button variant="ghost" size="icon" className="text-white hover:text-primary" onClick={fitView} disabled={!hasOutline} title="全体表示"><Maximize className="h-4 w-4"/></Button>
                 <div className="h-px bg-white/10 my-1" />
                 {/* Simplify controls (top tab only) */}
                 {!isBottomTab && (
@@ -288,6 +312,7 @@ export default function OutlineEditorCanvas() {
                             size="sm"
                             className="text-[9px] text-white/70 hover:text-white h-6 px-1"
                             onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 30))}
+                            disabled={!hasOutline}
                             title="粗め (~30点)"
                         >
                             粗
@@ -297,11 +322,25 @@ export default function OutlineEditorCanvas() {
                             size="sm"
                             className="text-[9px] text-white/70 hover:text-white h-6 px-1"
                             onClick={() => setOutlinePoints(simplifyToCount(outlinePoints, 120))}
+                            disabled={!hasOutline}
                             title="細かめ (~120点)"
                         >
                             細
                         </Button>
                     </div>
+                )}
+                <div className="h-px bg-white/10 my-1" />
+                {!isBottomTab && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-[9px] text-white/70 hover:text-white h-8 px-1 leading-tight"
+                        onClick={handleExtractOutline}
+                        disabled={!outlineImage || isExtractingOutline}
+                        title={isImageEditMode ? '向きを確定して抽出' : '画像から輪郭を抽出'}
+                    >
+                        {isExtractingOutline ? '抽出中' : isImageEditMode ? '向き確定' : '画像抽出'}
+                    </Button>
                 )}
                 <div className="h-px bg-white/10 my-1" />
                 <Toggle pressed={isImageEditMode} onPressedChange={setIsImageEditMode} className={isImageEditMode ? "bg-primary text-primary-foreground" : "text-white"} disabled={!outlineImage}>
@@ -403,7 +442,22 @@ export default function OutlineEditorCanvas() {
                         {/* Top outline */}
                         {!isBottomTab && (
                             <>
-                                <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke={isImageEditMode ? "#ffffff" : "#14b8a6"} strokeWidth={2 / transform.k} vectorEffect="non-scaling-stroke" opacity={isImageEditMode ? 0.3 : 1} />
+                                {outlinePoints.length === 0 && (
+                                    <text
+                                        x={bounds.minX + 150}
+                                        y={bounds.minY + 70}
+                                        textAnchor="middle"
+                                        fontSize={12 / transform.k}
+                                        fill="#ffffff"
+                                        opacity={0.55}
+                                        style={{ pointerEvents: 'none', userSelect: 'none' }}
+                                    >
+                                        画像をアップロードして輪郭を抽出してください
+                                    </text>
+                                )}
+                                {outlinePoints.length > 0 && (
+                                    <path d={pathD} fill="rgba(20, 184, 166, 0.1)" stroke={isImageEditMode ? "#ffffff" : "#14b8a6"} strokeWidth={2 / transform.k} vectorEffect="non-scaling-stroke" opacity={isImageEditMode ? 0.3 : 1} />
+                                )}
                                 {!isImageEditMode && outlinePoints.map((p, i) => (
                                     <circle key={i} cx={p.x} cy={p.y} r={draggingIndex === i ? 8/transform.k : 4/transform.k} fill={draggingIndex === i ? "#ffffff" : "#14b8a6"} stroke="#ffffff" strokeWidth={1/transform.k} className="cursor-move transition-all hover:r-6" onMouseDown={(e) => handleMouseDown(i, e)} />
                                 ))}

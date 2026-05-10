@@ -1,4 +1,4 @@
-"MasaCAD Core - Geometry Module v4.2\nハイブリッド方式：輪郭維持 + テンプレートプロファイル\n\n設計思想:\n- 輪郭CSVの閉じたループを正確に維持（端部が自然に閉じる）\n- 輪郭内部にグリッド頂点を追加\n- テンプレートから抽出したプロファイルで高さを制御\n- アーチ・ヒールカップ・壁が正確に再現される\n- 底面は完全に平坦（Z=0）\n\n座標系:\n- X: 0=つま先、max=踵\n- Y: 0=外側（小指側）、max=内側（土踏まず側）\n- Z: 0=底面、up=上面\n\n作成日: 2024-12-28\n"
+"MasaCAD Core - Geometry Module v4.2\nハイブリッド方式：輪郭維持 + テンプレートプロファイル\n\n設計思想:\n- 輪郭点列の閉じたループを正確に維持（端部が自然に閉じる）\n- 輪郭内部にグリッド頂点を追加\n- テンプレートから抽出したプロファイルで高さを制御\n- アーチ・ヒールカップ・壁が正確に再現される\n- 底面は完全に平坦（Z=0）\n\n座標系:\n- X: 0=つま先、max=踵\n- Y: 0=外側（小指側）、max=内側（土踏まず側）\n- Z: 0=底面、up=上面\n\n作成日: 2024-12-28\n"
 
 import numpy as np
 from scipy.interpolate import CubicSpline, interp1d, LinearNDInterpolator
@@ -29,7 +29,7 @@ def log_debug(msg):
 # 設計ルール（テンプレートから抽出）
 # =============================================================================
 
-# 座標系: X=0%=踵、X=100%=つま先（輪郭CSV基準）
+# 座標系: X=0%=踵、X=100%=つま先（輪郭点列基準）
 # Y=0=外側、Y=1=内側
 
 # 壁高さプロファイル（X位置% → (内壁高さmm, 外壁高さmm)）
@@ -434,25 +434,6 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
 # =============================================================================
 # 輪郭処理
 # =============================================================================
-
-def load_outline_csv(csv_path: Path, flip_x: bool = False, flip_y: bool = False) -> np.ndarray:
-    import pandas as pd
-    csv_path = Path(csv_path)
-    if not csv_path.exists(): raise FileNotFoundError(f"輪郭CSVが見つかりません: {csv_path}")
-    df = pd.read_csv(csv_path)
-    if 'x_mm' in df.columns and 'y_mm' in df.columns: outline = df[['x_mm', 'y_mm']].values
-    elif 'x' in df.columns and 'y' in df.columns: outline = df[['x', 'y']].values
-    else: outline = df.iloc[:, :2].values
-    
-    if flip_x: outline[:, 0] = outline[:, 0].max() - outline[:, 0]
-    if flip_y: outline[:, 1] = outline[:, 1].max() - outline[:, 1]
-    
-    outline[:, 0] -= outline[:, 0].min()
-    outline[:, 1] -= outline[:, 1].min()
-    print(f"[INFO] 輪郭CSV読み込み: {csv_path.name}")
-    print(f"[INFO] 輪郭点数: {len(outline)}")
-    return outline
-
 
 def get_outline_y_bounds(outline: np.ndarray) -> Tuple:
     x = outline[:, 0]
@@ -1396,7 +1377,6 @@ def generate_insole_mesh(
 
 
 def generate_insole_from_outline(
-    outline_csv_path: Optional[Path] = None,
     outline_points: Optional[List[Dict[str, float]]] = None,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -1424,10 +1404,6 @@ def generate_insole_from_outline(
         top_y_offset = outline_np[:, 1].min()
         outline_np[:, 0] -= top_x_offset
         outline_np[:, 1] -= top_y_offset
-    elif outline_csv_path:
-        outline_np = load_outline_csv(outline_csv_path, flip_x=flip_x, flip_y=flip_y)
-        top_x_offset = 0.0
-        top_y_offset = 0.0
     else:
         raise ValueError("No outline provided")
 
