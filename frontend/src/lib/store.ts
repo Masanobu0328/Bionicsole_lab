@@ -53,6 +53,7 @@ type State = {
     outlineImageSize: { width: number; height: number };
     outlinePoints: { x: number; y: number }[];
     outlineScale: number;
+    outlineTargetLengthMm: number;
     bottomOutlinePoints: { x: number; y: number }[];
     useBottomOutline: boolean;
     landmarkConfig: Record<string, number>;
@@ -68,6 +69,7 @@ type State = {
     setOutlineImageSize: (size: { width: number; height: number }) => void;
     setOutlinePoints: (points: { x: number; y: number }[]) => void;
     setOutlineScale: (scale: number) => void;
+    setOutlineTargetLengthMm: (lengthMm: number) => void;
     setBottomOutlinePoints: (points: { x: number; y: number }[]) => void;
     setUseBottomOutline: (val: boolean) => void;
     setLandmarkConfig: (config: Record<string, number>) => void;
@@ -124,6 +126,7 @@ type PatientPreset = {
         widthConfig: Record<string, number>;
         archCurves: ArchCurves | null;
         outlinePoints: { x: number; y: number }[];
+        outlineTargetLengthMm: number;
         outlineImageTransform: State['outlineImageTransform'];
         outlineImageSize: { width: number; height: number };
         outlineImage: string | null;
@@ -206,6 +209,7 @@ function buildPatientPreset(state: State): PatientPreset {
             widthConfig: state.widthConfig,
             archCurves: state.archCurves,
             outlinePoints: state.outlinePoints,
+            outlineTargetLengthMm: state.outlineTargetLengthMm,
             outlineImageTransform: state.outlineImageTransform,
             outlineImageSize: state.outlineImageSize,
             outlineImage: state.outlineImage,
@@ -256,6 +260,7 @@ function applyPresetParams(set: (partial: Partial<State>) => void, params: Patie
         widthConfig: params.widthConfig,
         archCurves: params.archCurves,
         outlinePoints: params.outlinePoints ?? [],
+        outlineTargetLengthMm: params.outlineTargetLengthMm ?? 260,
         outlineImageTransform: params.outlineImageTransform ?? DEFAULT_OUTLINE_IMAGE_TRANSFORM,
         outlineImageSize: params.outlineImageSize ?? DEFAULT_OUTLINE_IMAGE_SIZE,
         outlineImage: params.outlineImage ?? null,
@@ -393,6 +398,7 @@ export const useStore = create<State>((set, get) => ({
     outlineImageSize: DEFAULT_OUTLINE_IMAGE_SIZE,
     outlinePoints: [],
     outlineScale: 1.0,
+    outlineTargetLengthMm: 260,
     bottomOutlinePoints: [],
     useBottomOutline: true,
     landmarkConfig: {
@@ -421,6 +427,7 @@ export const useStore = create<State>((set, get) => ({
         set({
             patientId: id,
             outlinePoints: [],
+            outlineTargetLengthMm: 260,
             bottomOutlinePoints: [],
             useBottomOutline: true,
             archCurves: null,
@@ -440,6 +447,7 @@ export const useStore = create<State>((set, get) => ({
     setOutlineImageSize: (outlineImageSize) => set({ outlineImageSize }),
     setOutlinePoints: (outlinePoints) => set({ outlinePoints }),
     setOutlineScale: (outlineScale) => set({ outlineScale }),
+    setOutlineTargetLengthMm: (outlineTargetLengthMm) => set({ outlineTargetLengthMm }),
     setBottomOutlinePoints: (bottomOutlinePoints) => set({ bottomOutlinePoints }),
     setUseBottomOutline: (useBottomOutline) => set({ useBottomOutline }),
     setLandmarkConfig: (landmarkConfig) => set({ landmarkConfig }),

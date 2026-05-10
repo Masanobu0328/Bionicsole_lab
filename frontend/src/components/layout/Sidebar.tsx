@@ -9,8 +9,6 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { useStore, STEPS } from '@/lib/store';
-import { parseOutlineCsv } from '@/lib/geometry-utils';
-import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 
 const LANDMARK_LIST = [
     { id: 'arch_start', label: 'アーチ開始 (Medial)' },
@@ -23,8 +21,6 @@ const LANDMARK_LIST = [
 ];
 
 export default function Sidebar() {
-    const [targetSize, setTargetSize] = useState('260'); // String for Select
-
     const store = useStore();
     const {
         currentStep, setCurrentStep,
@@ -33,7 +29,8 @@ export default function Sidebar() {
         footSide, setFootSide,
         flipOrientation, setFlipOrientation,
         
-        setOutlineImage, setOutlinePoints,
+        setOutlineImage,
+        outlineTargetLengthMm, setOutlineTargetLengthMm,
         landmarkConfig, updateLandmarkPos,
         activeLandmarkId, setActiveLandmarkId,
         
@@ -74,13 +71,6 @@ export default function Sidebar() {
         }
     };
 
-    const handleApplySize = () => {
-        const size = parseInt(targetSize, 10);
-        // Use the demo outline as base, scaled to size, and smoothed/resampled
-        // Use 50 points for easy editing. Higher density (300) will be added at generation time.
-        setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, size, 50));
-    };
-
     // Navigation Helpers
     const nextStep = () => {
         setCurrentStep(Math.min(Object.keys(STEPS).length - 1, currentStep + 1));
@@ -117,7 +107,10 @@ export default function Sidebar() {
                         <div className="space-y-2">
                             <Label>サイズ目安 (mm)</Label>
                             <div className="flex gap-2">
-                                <Select value={targetSize} onValueChange={setTargetSize}>
+                                <Select
+                                    value={outlineTargetLengthMm.toString()}
+                                    onValueChange={(value) => setOutlineTargetLengthMm(parseInt(value, 10))}
+                                >
                                     <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         {Array.from({ length: (300 - 220) / 5 + 1 }).map((_, i) => {
@@ -128,9 +121,7 @@ export default function Sidebar() {
                                         })}
                                     </SelectContent>
                                 </Select>
-                                <Button variant="secondary" onClick={handleApplySize}>適用</Button>
                             </div>
-                            <p className="text-xs text-muted-foreground">※適用すると現在の形状がリセットされます</p>
                         </div>
                     </div>
                 );

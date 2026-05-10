@@ -74,7 +74,7 @@ export type InsoleParams = {
     enable_lattice: boolean;
     lattice_cell_size: number;
     strut_radius: number;
-    outline_points?: Point[];
+    outline_points: Point[];
     landmark_config?: Record<string, number>;
     arch_curves?: ArchCurves;
     bottom_outline_points?: Point[];
@@ -380,6 +380,37 @@ export async function generateInsole(params: InsoleParams): Promise<GenerateResp
     }
 
     return response.json() as Promise<GenerateResponse>;
+}
+
+export async function extractOutlineFromImage(
+    image: Blob,
+    targetLengthMm: number,
+    numPoints = 120,
+): Promise<{ outline_points: Point[]; preview_png?: string }> {
+    const formData = new FormData();
+    formData.append('image', image, 'foot-outline-image.png');
+    formData.append('target_length_mm', targetLengthMm.toString());
+    formData.append('num_points', numPoints.toString());
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const response = await fetch(resolveApiUrl('/extract-outline'), {
+        method: 'POST',
+        headers: session ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        body: formData,
+    });
+
+    if (!response.ok) {
+        let detail = '';
+        try {
+            const errorData = await response.json();
+            detail = errorData?.detail || '';
+        } catch {
+            detail = await response.text();
+        }
+        throw new Error(detail || 'Failed to extract outline');
+    }
+
+    return response.json() as Promise<{ outline_points: Point[]; preview_png?: string }>;
 }
 
 export async function getTaskStatus(taskId: string): Promise<TaskStatus> {
