@@ -89,7 +89,11 @@ export default function Home() {
                 if (!active) {
                     return;
                 }
-                const message = error instanceof Error ? error.message : 'Failed to load patients.';
+                const message = error instanceof Error
+                    ? error.message
+                    : (typeof error === 'object' && error !== null && 'message' in error)
+                        ? String((error as { message: unknown }).message)
+                        : JSON.stringify(error);
                 setPatients([]);
                 setPatientsError(message);
             } finally {

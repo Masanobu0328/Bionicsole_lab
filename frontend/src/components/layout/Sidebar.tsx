@@ -9,6 +9,8 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { useStore, STEPS } from '@/lib/store';
+import { parseOutlineCsv } from '@/lib/geometry-utils';
+import { DEMO_OUTLINE_CSV } from '@/lib/demo-data';
 
 const LANDMARK_LIST = [
     { id: 'arch_start', label: 'アーチ開始 (Medial)' },
@@ -30,6 +32,7 @@ export default function Sidebar() {
         flipOrientation, setFlipOrientation,
         
         setOutlineImage,
+        outlinePoints, setOutlinePoints,
         outlineTargetLengthMm, setOutlineTargetLengthMm,
         landmarkConfig, updateLandmarkPos,
         activeLandmarkId, setActiveLandmarkId,
@@ -59,6 +62,11 @@ export default function Sidebar() {
         stlUrl, setStlUrl,
         setLatticeInfo,
     } = store;
+
+    const handleApplySize = () => {
+        if (outlinePoints.length > 0 && !window.confirm('既存の形状をリセットします。よろしいですか？')) return;
+        setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, outlineTargetLengthMm, 50));
+    };
 
     const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -105,7 +113,7 @@ export default function Sidebar() {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <Label>サイズ目安 (mm)</Label>
+                            <Label>サイズから作成</Label>
                             <div className="flex gap-2">
                                 <Select
                                     value={outlineTargetLengthMm.toString()}
@@ -121,7 +129,9 @@ export default function Sidebar() {
                                         })}
                                     </SelectContent>
                                 </Select>
+                                <Button variant="secondary" size="sm" onClick={handleApplySize}>適用</Button>
                             </div>
+                            <p className="text-xs text-muted-foreground">※適用すると現在の形状がリセットされます</p>
                         </div>
                     </div>
                 );

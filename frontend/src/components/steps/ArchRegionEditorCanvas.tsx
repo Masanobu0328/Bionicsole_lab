@@ -254,17 +254,21 @@ export default function ArchRegionEditorCanvas() {
             const outlineY = yBounds.min;
             const ray1Y = yBounds.min + (yBounds.max - yBounds.min) * (1 - r1Pct / 100);
             if (i === 0) return { x, y: outlineY };                        // mF0: at outline (arch start)
-            return { x, y: outlineY + (ray1Y - outlineY) * 0.6 };         // mF1-mF3: flat plateau ~60% toward ray1
+            if (i >= 2) return { x, y: ray1Y };                           // mF2, mF3: snap to Ray1
+            return { x, y: outlineY + (ray1Y - outlineY) * 0.8 };         // mF1: flat plateau ~80% toward ray1
         });
 
-        // mF4: X follows M5's actual position, Y = linear interpolation on mF3→mF5 line
+        // mF4: X follows M5's actual position, Y = linear interpolation on mF3→mF5 line + 10% toward Ray5
         const mf3 = pts[3];
+        const mf4XBounds = getOutlineYAtX(outlinePoints, mf4X);
+        const mf4Ray1Y = mf4XBounds ? mf4XBounds.min + (mf4XBounds.max - mf4XBounds.min) * (1 - r1Pct / 100) : 0;
+        const mf4Ray5Y = mf4XBounds ? mf4XBounds.min + (mf4XBounds.max - mf4XBounds.min) * (1 - (widthConfig['ray5_boundary'] ?? 25) / 100) : 0;
         let mf4Y: number;
         if (mf5.x > mf3.x) {
             const t = Math.max(0, Math.min(1, (mf4X - mf3.x) / (mf5.x - mf3.x)));
-            mf4Y = mf3.y + t * (mf5.y - mf3.y);
+            mf4Y = mf3.y + t * (mf5.y - mf3.y) + (mf4Ray5Y - mf4Ray1Y) * 0.10;
         } else {
-            mf4Y = mf3.y;
+            mf4Y = mf3.y + (mf4Ray5Y - mf4Ray1Y) * 0.10;
         }
         pts.push({ x: mf4X, y: mf4Y });
 
@@ -440,7 +444,7 @@ export default function ArchRegionEditorCanvas() {
 
             // 3. Define 4 Cardinal Points
             const pTop = { x: centerX, y: ray1Y };          // Ray 1
-            const metaPlus5X = metatarsalX + bounds.width * 0.03; // Metatarsal + 3% toward toe
+            const metaPlus5X = metatarsalX + bounds.width * 0.015; // Metatarsal + 1.5% toward toe
             const pRight = { x: metaPlus5X, y: centerY };   // Metatarsal + 5%
             const pBottom = { x: centerX, y: ray5Y };       // Ray 5
             // T6: midpoint between Ray1 and Ray5 at navicularX
@@ -543,14 +547,24 @@ export default function ArchRegionEditorCanvas() {
                         return { x, y: outlineY };
                     case 1: // M1: Ramp up toward arch - 60% from outline to Ray1
                         return { x, y: outlineY + (ray1Y - outlineY) * 0.60 };
-                    case 2: // M2: Subtalar - snap to Ray 1
-                        return { x, y: ray1Y };
-                    case 3: // M3: Navicular (peak) - 10% from Ray1 toward Ray5
+                    case 2: // M2: Subtalar - Ray1 + 10% toward Ray5
                         return { x, y: ray1Y + (ray5Y - ray1Y) * 0.10 };
-                    case 4: // M4: Cuneiform - snap to Ray 1
-                        return { x, y: ray1Y };
-                    case 5: // M5: On M4→MB1 line at midpoint (t=0.5 → 1.5% medial offset)
-                        return { x, y: ray1Y - (yBounds.max - yBounds.min) * 0.015 };
+                    case 3: // M3: Navicular (peak) - 40% from Ray1 toward Ray5
+                        return { x, y: ray1Y + (ray5Y - ray1Y) * 0.40 };
+                    case 4: // M4: Cuneiform - 40% from Ray1 toward Ray5
+                        return { x, y: ray1Y + (ray5Y - ray1Y) * 0.40 };
+                    case 5: { // M5: natural midpoint between M4 and MB1
+                        const m4X = bounds.minX + bounds.width * (cuneiformPct / 100);
+                        const mb1X = bounds.minX + bounds.width * (mb1Pct / 100);
+                        const m4YB = getOutlineYAtX(outlinePoints, m4X);
+                        const mb1YB = getOutlineYAtX(outlinePoints, mb1X);
+                        const m4R1 = m4YB ? m4YB.min + (m4YB.max - m4YB.min) * (1 - r1Pct / 100) : ray1Y;
+                        const m4R5 = m4YB ? m4YB.min + (m4YB.max - m4YB.min) * (1 - r5Pct / 100) : ray5Y;
+                        const m4Y = m4R1 + (m4R5 - m4R1) * 0.40;
+                        const mb1R1 = mb1YB ? mb1YB.min + (mb1YB.max - mb1YB.min) * (1 - r1Pct / 100) : ray1Y;
+                        const mb1Y = mb1R1 - (mb1YB ? mb1YB.max - mb1YB.min : yBounds.max - yBounds.min) * 0.03;
+                        return { x, y: (m4Y + mb1Y) / 2 + (ray5Y - ray1Y) * 0.10 };
+                    }
                     case 6: // MB1: End - 3% medial offset from Ray 1
                         return { x, y: ray1Y - (yBounds.max - yBounds.min) * 0.03 };
                     default:
@@ -559,28 +573,33 @@ export default function ArchRegionEditorCanvas() {
             });
         }
 
-        // Lateral Arch Logic (unchanged 5 points)
-        points.push(startP);
+        // Lateral Arch Logic (5 points: L0=start, L1, L2, L3, L4=end)
+        const r1PctL = widthConfig['ray1_boundary'] ?? 65;
+        const r5PctL = widthConfig['ray5_boundary'] ?? 25;
         const stepX = (endX - startX) / (numPoints - 1);
-        const peakPct = widthConfig['ray5_boundary'] ?? 25;
 
+        const lateralXRatios = [0.15, 0.50, 0.85]; // L1, L2, L3 as fraction of startX→endX
+
+        points.push(startP); // L0: outer outline edge
         for (let i = 1; i < numPoints - 1; i++) {
-            const x = startX + i * stepX;
-            const yBounds = getOutlineYAtX(outlinePoints, x);
+            const x = startX + (endX - startX) * lateralXRatios[i - 1];
+            const yB = getOutlineYAtX(outlinePoints, x);
+            if (!yB) { points.push({ x, y: (startP.y + endP.y) / 2 }); continue; }
 
-            if (yBounds) {
-                const t = i / (numPoints - 1);
-                const arcFactor = Math.sin(t * Math.PI);
-                const baseY = startP.y + (endP.y - startP.y) * t;
-                const guideY = yBounds.min + (yBounds.max - yBounds.min) * (1 - peakPct / 100);
-                const y = baseY + (guideY - baseY) * arcFactor;
-                points.push({ x, y });
+            const ray1YL = yB.min + (yB.max - yB.min) * (1 - r1PctL / 100);
+            const ray5YL = yB.min + (yB.max - yB.min) * (1 - r5PctL / 100);
+
+            let y: number;
+            if (i === 1 || i === 3) {
+                // L1, L3: snap to Ray5
+                y = ray5YL;
             } else {
-                points.push({ x, y: (startP.y + endP.y) / 2 });
+                // L2: 20% from Ray5 toward Ray1
+                y = ray5YL + (ray1YL - ray5YL) * 0.20;
             }
+            points.push({ x, y });
         }
-
-        points.push(endP);
+        points.push(endP); // L4: outer outline edge
         return points;
     };
 
@@ -983,6 +1002,15 @@ export default function ArchRegionEditorCanvas() {
             return { id: key, label: LM_LABELS[key] || key, x, yStart: isLateral ? yBounds.max : yBounds.min, yEnd: r5Y, isLateral };
         }).filter(g => g !== null) as { id: string, label: string, x: number, yStart: number, yEnd: number, isLateral: boolean }[];
     }, [outlinePoints, landmarkConfig, widthConfig, bounds]);
+
+    // Prevent browser pinch-zoom on the canvas area
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const prevent = (e: WheelEvent) => e.preventDefault();
+        el.addEventListener('wheel', prevent, { passive: false });
+        return () => el.removeEventListener('wheel', prevent);
+    }, []);
 
     return (
         <div ref={containerRef} className="relative w-full h-full bg-background overflow-hidden flex flex-col border border-border/50 rounded-xl">

@@ -1,3 +1,32 @@
+export function parseOutlineCsv(csvContent: string, targetLengthMm?: number, resampleCount = 0): { x: number; y: number }[] {
+    const lines = csvContent.trim().split('\n');
+    const points: { x: number; y: number }[] = [];
+    const startIdx = lines[0].includes('x_mm') ? 1 : 0;
+    let minX = Infinity, maxX = -Infinity;
+    for (let i = startIdx; i < lines.length; i++) {
+        const parts = lines[i].split(',');
+        if (parts.length >= 2) {
+            const x = parseFloat(parts[0]);
+            const y = parseFloat(parts[1]);
+            if (!isNaN(x) && !isNaN(y)) {
+                points.push({ x, y });
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+            }
+        }
+    }
+    if (points.length === 0) return [];
+    let result = points;
+    if (targetLengthMm) {
+        const scale = targetLengthMm / (maxX - minX);
+        result = result.map(p => ({ x: p.x * scale, y: p.y * scale }));
+    }
+    if (resampleCount > 0) {
+        result = resamplePolygon(result, resampleCount);
+    }
+    return result;
+}
+
 export function generateFootOutline(lengthMm: number): { x: number; y: number }[] {
     // Legacy fallback
     const width = lengthMm * 0.35; 

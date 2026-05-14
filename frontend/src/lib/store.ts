@@ -445,15 +445,38 @@ export const useStore = create<State>((set, get) => ({
         outlineImageTransform: { ...state.outlineImageTransform, ...transform },
     })),
     setOutlineImageSize: (outlineImageSize) => set({ outlineImageSize }),
-    setOutlinePoints: (outlinePoints) => set({ outlinePoints }),
+    setOutlinePoints: (outlinePoints) => set({ outlinePoints, archCurves: null, currentModelUrl: null, stlUrl: null }),
     setOutlineScale: (outlineScale) => set({ outlineScale }),
     setOutlineTargetLengthMm: (outlineTargetLengthMm) => set({ outlineTargetLengthMm }),
     setBottomOutlinePoints: (bottomOutlinePoints) => set({ bottomOutlinePoints }),
     setUseBottomOutline: (useBottomOutline) => set({ useBottomOutline }),
     setLandmarkConfig: (landmarkConfig) => set({ landmarkConfig }),
-    updateLandmarkPos: (id, percent) => set((state) => ({
-        landmarkConfig: { ...state.landmarkConfig, [id]: percent },
-    })),
+    updateLandmarkPos: (id, percent) => set((state) => {
+        const nextLandmarkConfig = { ...state.landmarkConfig, [id]: percent };
+
+        // Arch-position landmarks → update archSettings start/end positions (Step 6 反映).
+        // Also clear archCurves so Step 5 regenerates curves from new landmark positions.
+        // Heights in archSettings are untouched.
+        const archPatch: Partial<typeof state.archSettingsRight> = {};
+        const archCurveIds = new Set(['arch_start', 'lateral_arch_start', 'metatarsal', 'cuboid', 'navicular', 'medial_cuneiform', 'subtalar']);
+
+        if (id === 'arch_start')         archPatch.medial_start  = percent;
+        if (id === 'lateral_arch_start') archPatch.lateral_start = percent;
+        if (id === 'metatarsal')         archPatch.medial_end    = percent + 1;
+        if (id === 'cuboid')             archPatch.lateral_end   = percent;
+
+        const hasPatch = Object.keys(archPatch).length > 0;
+        const resetCurves = archCurveIds.has(id);
+
+        return {
+            landmarkConfig: nextLandmarkConfig,
+            ...(resetCurves && { archCurves: null }),
+            ...(hasPatch && {
+                archSettingsRight: { ...state.archSettingsRight, ...archPatch },
+                archSettingsLeft:  { ...state.archSettingsLeft,  ...archPatch },
+            }),
+        };
+    }),
     setWidthConfig: (widthConfig) => set({ widthConfig }),
     updateWidthConfig: (id, percent) => set((state) => {
         const nextWidthConfig = { ...state.widthConfig, [id]: percent };
@@ -527,6 +550,8 @@ export const useStore = create<State>((set, get) => ({
                 saveOutlineToDB(patientId, 'right', state.outlinePoints, state.bottomOutlinePoints),
                 saveOutlineToDB(patientId, 'left', state.outlinePoints, state.bottomOutlinePoints),
             ]);
+            // Also save image and transform to localStorage since Supabase doesn't store them
+            savePresetToLocalStorage(patientId, preset);
             return true;
         } catch (error) {
             console.warn('Failed to save design to Supabase. Falling back to localStorage.', error);
@@ -567,6 +592,15 @@ export const useStore = create<State>((set, get) => ({
                 }
 
                 applyOutlineToState(nextState, outline);
+
+                // Supabase doesn't store image data — restore it from localStorage
+                const localPreset = readPresetFromLocalStorage(patientId);
+                if (localPreset?.params?.outlineImage) {
+                    nextState.outlineImage = localPreset.params.outlineImage;
+                    nextState.outlineImageTransform = localPreset.params.outlineImageTransform ?? DEFAULT_OUTLINE_IMAGE_TRANSFORM;
+                    nextState.outlineImageSize = localPreset.params.outlineImageSize ?? DEFAULT_OUTLINE_IMAGE_SIZE;
+                }
+
                 set(nextState);
                 return true;
             }

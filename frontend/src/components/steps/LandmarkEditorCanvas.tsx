@@ -103,6 +103,15 @@ export default function LandmarkEditorCanvas() {
         return () => clearTimeout(timer);
     }, [outlinePoints.length]);
 
+    // Prevent browser pinch-zoom on the canvas area
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const prevent = (e: WheelEvent) => e.preventDefault();
+        el.addEventListener('wheel', prevent, { passive: false });
+        return () => el.removeEventListener('wheel', prevent);
+    }, []);
+
     const getLogicalPos = (e: React.MouseEvent | MouseEvent) => {
         if (!svgRef.current) return { x: 0, y: 0 };
         const CTM = svgRef.current.getScreenCTM();

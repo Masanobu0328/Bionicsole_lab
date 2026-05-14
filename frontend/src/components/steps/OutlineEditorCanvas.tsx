@@ -35,6 +35,25 @@ export default function OutlineEditorCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Initial view: show 0-300mm area
+    useEffect(() => {
+        if (outlinePoints.length > 0) return;
+        const timer = setTimeout(() => {
+            if (!containerRef.current) return;
+            const w = containerRef.current.clientWidth;
+            const h = containerRef.current.clientHeight;
+            const targetW = 380;
+            const targetH = 130;
+            const padding = 40;
+            const k = Math.min((w - padding * 2) / targetW, (h - padding * 2) / targetH);
+            const x = (w - targetW * k) / 2;
+            const y = (h - targetH * k) / 2;
+            setTransform({ x, y, k });
+        }, 50);
+        return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // Active points for editing depend on tab
     const isBottomTab = activeTab === 'bottom';
     const editablePoints = isBottomTab ? bottomOutlinePoints : outlinePoints;
@@ -54,6 +73,7 @@ export default function OutlineEditorCanvas() {
     // Modes
     const [isImageEditMode, setIsImageEditMode] = useState(false);
     const [isResizingImage, setIsResizingImage] = useState(false);
+    const resizeSignRef = useRef<1 | -1>(1);
     const [isRotating, setIsRotating] = useState(false);
     const rotateStartRef = useRef<{ angle: number; initialRotation: number }>({ angle: 0, initialRotation: 0 });
 
@@ -109,8 +129,9 @@ export default function OutlineEditorCanvas() {
         setDraggingIndex(index);
     };
 
-    const handleResizeStart = (e: React.MouseEvent) => {
+    const handleResizeStart = (e: React.MouseEvent, sign: 1 | -1 = 1) => {
         e.preventDefault(); e.stopPropagation();
+        resizeSignRef.current = sign;
         setIsResizingImage(true);
         setLastPanPos({ x: e.clientX, y: e.clientY });
     };
@@ -133,13 +154,8 @@ export default function OutlineEditorCanvas() {
 
     const handleWheel = (e: React.WheelEvent) => {
         e.preventDefault();
-        if (isImageEditMode && outlineImage) {
-            const factor = e.deltaY < 0 ? 1.02 : 0.98;
-            setOutlineImageTransform({ scale: outlineImageTransform.scale * factor });
-        } else {
-            const factor = e.deltaY < 0 ? 1.1 : 0.9;
-            setTransform(prev => ({ ...prev, k: Math.max(0.1, Math.min(10, prev.k * factor)) }));
-        }
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        setTransform(prev => ({ ...prev, k: Math.max(0.1, Math.min(10, prev.k * factor)) }));
     };
 
     const toggleFlipX = () => setOutlineImageTransform({ flipX: !outlineImageTransform.flipX });
@@ -178,7 +194,7 @@ export default function OutlineEditorCanvas() {
                 const delta = currentAngle - rotateStartRef.current.angle;
                 setOutlineImageTransform({ rotation: rotateStartRef.current.initialRotation + delta });
             } else if (isResizingImage) {
-                const dx = e.clientX - lastPanPos.x;
+                const dx = (e.clientX - lastPanPos.x) * resizeSignRef.current;
                 const factor = 1 + (dx / 500);
                 setOutlineImageTransform({ scale: outlineImageTransform.scale * factor });
                 setLastPanPos({ x: e.clientX, y: e.clientY });
@@ -232,6 +248,15 @@ export default function OutlineEditorCanvas() {
         const timer = setTimeout(fitView, 100);
         return () => clearTimeout(timer);
     }, [outlinePoints.length]);
+
+    // Prevent browser pinch-zoom on the canvas area
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const prevent = (e: WheelEvent) => e.preventDefault();
+        el.addEventListener('wheel', prevent, { passive: false });
+        return () => el.removeEventListener('wheel', prevent);
+    }, []);
 
     const getBounds = () => {
         if (outlinePoints.length === 0) return { minX: 0, maxX: 300, minY: 0, maxY: 150 };
@@ -394,7 +419,16 @@ export default function OutlineEditorCanvas() {
                                 <g style={{ transformOrigin: 'center', transformBox: 'fill-box', transform: `scale(${outlineImageTransform.flipX ? -1 : 1}, ${outlineImageTransform.flipY ? -1 : 1})` }}>
                                     <image href={outlineImage} x={0} y={0} width={outlineImageSize.width} height={outlineImageSize.height} opacity={isImageEditMode ? 0.8 : outlineImageTransform.opacity} className={isImageEditMode ? "outline outline-2 outline-primary" : ""} />
                                     {isImageEditMode && (
-                                        <circle cx={outlineImageSize.width} cy={outlineImageSize.height} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'se-resize' }} onMouseDown={handleResizeStart} />
+                                        <>
+                                            {/* TL */}
+                                            <circle cx={0} cy={0} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'nw-resize' }} onMouseDown={(e) => handleResizeStart(e, -1)} />
+                                            {/* TR */}
+                                            <circle cx={outlineImageSize.width} cy={0} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'ne-resize' }} onMouseDown={(e) => handleResizeStart(e, 1)} />
+                                            {/* BL */}
+                                            <circle cx={0} cy={outlineImageSize.height} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'sw-resize' }} onMouseDown={(e) => handleResizeStart(e, -1)} />
+                                            {/* BR */}
+                                            <circle cx={outlineImageSize.width} cy={outlineImageSize.height} r={8/transform.k} fill="#ffffff" stroke="#14b8a6" strokeWidth={2/transform.k} style={{ cursor: 'se-resize' }} onMouseDown={(e) => handleResizeStart(e, 1)} />
+                                        </>
                                     )}
                                 </g>
                                 {/* Rotate handle (outside flip group, rotates with image) */}
