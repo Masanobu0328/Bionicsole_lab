@@ -197,6 +197,22 @@ function SceneSetup() {
     return null;
 }
 
+// city preset HDR is fetched from an external CDN; if it's unreachable
+// (offline, corporate firewall), fall back to no env map instead of crashing.
+class EnvironmentErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+    constructor(props: { children: React.ReactNode }) {
+        super(props);
+        this.state = { hasError: false };
+    }
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+    render() {
+        if (this.state.hasError) return null;
+        return this.props.children;
+    }
+}
+
 export default function Canvas3D() {
     const currentModelUrl = useStore((state) => state.currentModelUrl);
     const baseThickness = useStore((state) => state.baseThickness);
@@ -217,7 +233,11 @@ export default function Canvas3D() {
 
                 <ambientLight intensity={0.6} />
                 <directionalLight position={[50, 100, 50]} intensity={1.2} />
-                <Environment preset="city" />
+                <EnvironmentErrorBoundary>
+                    <Suspense fallback={null}>
+                        <Environment preset="city" />
+                    </Suspense>
+                </EnvironmentErrorBoundary>
 
                 <Grid
                     args={[300, 300]}

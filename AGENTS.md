@@ -94,4 +94,4 @@ Codexは小規模実装を担当する。
 
 - 「UIを開く」は通常UI（`frontend/` の Next.js、`http://localhost:3000`）を指す
 - 開発用UI（`ui/app.py` の Streamlit、`http://localhost:8501`）は「開発用を開く」の明示時のみ
-- UIを開く際は、同時にバックエンド（`python backend/main.py`、ポート `8001`）も起動する
+- UIを開く際は、同時にバックエンド（`python backend/main.py`、ポート `8000`）も起動する
