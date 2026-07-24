@@ -1,0 +1,39 @@
+name: Supabase keep-alive
+
+# Supabase free-tier projects are auto-paused (INACTIVE) after 7 days without
+# activity, which surfaces in the app as endless "Failed to fetch" errors.
+# This workflow pings the REST API twice a week to keep the project awake.
+
+on:
+  schedule:
+    # 03:00 UTC (12:00 JST) every Monday and Thursday
+    - cron: '0 3 * * 1,4'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY repository secrets are not set."
+            exit 1
+          fi
+
+          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$SUPABASE_URL/rest/v1/patients?select=id&limit=1")
+
+          echo "Supabase responded with HTTP $status"
+
+          # 2xx/4xx all prove the project is awake and serving requests.
+          # 000 (no response) or 5xx means it is paused or broken.
+          if [ "$status" = "000" ] || [ "$status" -ge 500 ]; then
+            echo "::error::Supabase project looks paused or unreachable."
+            exit 1
+          fi

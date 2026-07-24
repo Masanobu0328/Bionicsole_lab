@@ -158,3 +158,32 @@ MIT License
 
 **MasaCAD** - Next-Gen Insole CAD System
 
+---
+
+## 開発サーバー起動手順
+
+ローカル開発ではバックエンドを `http://localhost:8000`、フロントエンドを `http://localhost:3000` に統一します。
+
+### `.claude/launch.json` 経由
+
+1. `Backend (FastAPI)` を起動します。ポートは `8000` です。
+2. `Frontend (Next.js)` を起動します。ポートは `3000` です。
+3. ブラウザで `http://localhost:3000` を開きます。
+
+### `start.vbs` / `stop.vbs` 経由
+
+- `start.vbs`: FastAPI backend と Next.js frontend を最小化ウィンドウで起動します。
+- `stop.vbs`: `8000` と `3000` で LISTEN している開発サーバープロセスを停止します。
+
+### 環境変数
+
+フロントエンドのローカル API 接続先は `frontend/.env.local` の次の値を使います。
+
+```env
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+```
+
+### Supabase 運用メモ
+
+Supabase 無料プランは一定期間未使用だとプロジェクトが `INACTIVE` になり、フロントエンドでは `Failed to fetch` の原因になります。復旧は Supabase ダッシュボードから対象プロジェクトを restore してください。
+

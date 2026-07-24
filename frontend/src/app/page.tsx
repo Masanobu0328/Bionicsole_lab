@@ -37,23 +37,38 @@ export default function Home() {
     const [newPatientCode, setNewPatientCode] = useState('');
     const [newPatientName, setNewPatientName] = useState('');
     const [creatingPatient, setCreatingPatient] = useState(false);
+    const [connectionError, setConnectionError] = useState<string | null>(null);
 
     useEffect(() => {
         let active = true;
 
-        supabase.auth.getSession().then(({ data: { session: nextSession } }) => {
-            if (!active) {
-                return;
-            }
-            setSession(nextSession);
-            setAuthLoading(false);
-        });
+        supabase.auth.getSession()
+            .then(({ data: { session: nextSession } }) => {
+                if (!active) {
+                    return;
+                }
+                setSession(nextSession);
+                setConnectionError(null);
+                setAuthLoading(false);
+            })
+            .catch((error) => {
+                // Supabase unreachable (project auto-paused / offline). Do not hang
+                // on the loading screen - fall through to the login view with a notice.
+                if (!active) {
+                    return;
+                }
+                console.warn('Failed to restore Supabase session:', error);
+                setSession(null);
+                setConnectionError('Supabase に接続できません。プロジェクトが一時停止(スリープ)している可能性があります。');
+                setAuthLoading(false);
+            });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
             if (!active) {
                 return;
             }
             setSession(nextSession);
+            setConnectionError(null);
             setAuthLoading(false);
         });
 
@@ -300,7 +315,16 @@ export default function Home() {
     }
 
     if (!session) {
-        return <LoginPage />;
+        return (
+            <>
+                {connectionError && (
+                    <div className="fixed inset-x-0 top-0 z-50 bg-red-600/90 px-4 py-2 text-center text-sm font-medium text-white">
+                        {connectionError}
+                    </div>
+                )}
+                <LoginPage />
+            </>
+        );
     }
 
     return (
