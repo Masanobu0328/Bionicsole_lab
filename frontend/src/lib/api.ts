@@ -1,3 +1,4 @@
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api/v1';
@@ -150,8 +151,42 @@ function mapPatientRow(row: DbPatientRow): Patient {
     };
 }
 
+// Cache the session instead of calling getSession() on every request. When the
+// Supabase project is unreachable, concurrent getSession() calls contend for the
+// gotrue auth lock and produce "lock was stolen" errors on top of the real fault.
+let cachedSession: Session | null = null;
+let sessionPrimed = false;
+let authSubscribed = false;
+
+function ensureAuthSubscription(): void {
+    if (authSubscribed || typeof window === 'undefined') {
+        return;
+    }
+    authSubscribed = true;
+    supabase.auth.onAuthStateChange((_event, session) => {
+        cachedSession = session;
+        sessionPrimed = true;
+    });
+}
+
+export async function getCurrentSession(): Promise<Session | null> {
+    ensureAuthSubscription();
+    if (sessionPrimed) {
+        return cachedSession;
+    }
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        cachedSession = session;
+        sessionPrimed = true;
+        return session;
+    } catch (error) {
+        console.warn('Supabase session is unavailable:', error);
+        return null;
+    }
+}
+
 async function getAuthHeaders(): Promise<HeadersInit> {
-    const { data: { session } } = await supabase.auth.getSession();
+    const session = await getCurrentSession();
     return {
         'Content-Type': 'application/json',
         ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
@@ -207,7 +242,7 @@ export async function createPatient(patientCode: string, displayLabel: string): 
     const normalizedCode = patientCode.trim();
     const normalizedLabel = displayLabel.trim() || normalizedCode;
 
-    const { data: { session } } = await supabase.auth.getSession();
+    const session = await getCurrentSession();
     const practitionerId = session?.user?.id;
 
     const { data, error } = await supabase
@@ -392,7 +427,7 @@ export async function extractOutlineFromImage(
     formData.append('target_length_mm', targetLengthMm.toString());
     formData.append('num_points', numPoints.toString());
 
-    const { data: { session } } = await supabase.auth.getSession();
+    const session = await getCurrentSession();
     const response = await fetch(resolveApiUrl('/extract-outline'), {
         method: 'POST',
         headers: session ? { Authorization: `Bearer ${session.access_token}` } : undefined,
