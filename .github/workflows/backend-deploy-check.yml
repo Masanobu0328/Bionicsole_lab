@@ -1,0 +1,67 @@
+name: Backend deploy check
+
+# Reproduces what Railway does (nixpacks + Python 3.12 + requirements.txt +
+# the Procfile start command + a GET / healthcheck) so a deploy that would
+# fail in production fails here first, on the pull request.
+#
+# This exists because a missing python-multipart shipped to main on
+# 2026-05-11 and silently broke every production deploy for 2.5 months:
+# the image builds fine, the app only crashes at import time.
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'core/**'
+      - 'requirements.txt'
+      - 'Procfile'
+      - 'railway.json'
+      - '.github/workflows/backend-deploy-check.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Match the interpreter nixpacks uses on Railway.
+          python-version: '3.12'
+
+      - name: Install dependencies (the same file Railway installs)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Import the app the way uvicorn does
+        run: python -c "import backend.main; print('import OK')"
+
+      - name: Start the app with the Procfile command and healthcheck it
+        run: |
+          uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
+          app_pid=$!
+
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              echo "::error::The app exited during startup. Railway's healthcheck would fail too."
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+              echo "Healthcheck OK"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::The app never became healthy within 60s."
+          exit 1
+
+      - name: Record the resolved dependency versions
+        if: always()
+        run: pip freeze
