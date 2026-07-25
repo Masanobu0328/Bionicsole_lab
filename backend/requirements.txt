@@ -9,4 +9,5 @@ scipy
 supabase
 python-jose[cryptography]
 httpx
+python-multipart>=0.0.9
 Pillow>=10.0.0

@@ -8,6 +8,8 @@ python-dotenv>=1.0.0
 supabase>=2.0.0
 python-jose[cryptography]>=3.3.0
 httpx>=0.24.0
+# Required by the /extract-outline endpoint (UploadFile / Form)
+python-multipart>=0.0.9
 
 # Core - Mesh Processing
 trimesh>=3.21.0
