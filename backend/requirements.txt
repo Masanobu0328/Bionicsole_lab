@@ -1,13 +1,7 @@
-fastapi
-uvicorn
-pydantic
-python-dotenv
-numpy
-pandas
-trimesh
-scipy
-supabase
-python-jose[cryptography]
-httpx
-python-multipart>=0.0.9
-Pillow>=10.0.0
+# Single source of truth is the repository root requirements.txt - that is the
+# only file Railway installs. Keeping a second, hand-maintained copy here is how
+# python-multipart went missing in production for 2.5 months: it was added to
+# neither, and there was no obvious "the" file to add it to.
+#
+# pip resolves this path relative to this file, so it works from any directory.
+-r ../requirements.txt
