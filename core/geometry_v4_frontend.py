@@ -1210,9 +1210,19 @@ def generate_insole_mesh(
     wall_params: dict = None,
     heel_cup_height: float = None,
     arch_curves: dict = None,
-    bottom_outline: np.ndarray = None
+    bottom_outline: np.ndarray = None,
+    progress_callback: callable = None
 ) -> trimesh.Trimesh:
-    print(f"[INFO] === MasaCAD v4.3 (Frontend) ===")
+    import time as _t
+    _t_start = _t.time()
+    def _log_t(msg):
+        print(f"[TIMING +{_t.time()-_t_start:.2f}s] {msg}", flush=True)
+    def _progress(msg, pct):
+        if progress_callback:
+            try: progress_callback(msg, pct)
+            except: pass
+    _log_t(f"=== MasaCAD v4.3 (Frontend) === outline_pts={len(outline)}")
+    _progress("Preparing outline...", 5)
     if heel_cup_height: heel_cup_scale = heel_cup_height / HEEL_CUP_PROFILE.get(0.0, 1.8)
 
     if np.allclose(outline[0], outline[-1]): outline = outline[:-1]
@@ -1246,8 +1256,12 @@ def generate_insole_mesh(
         )
 
     n_boundary = len(outline)
+    _log_t(f"after heel resample: outline={n_boundary} pts")
+    _progress("Building profiles...", 10)
     profiles = create_profile_interpolators(arch_settings, landmark_settings, wall_params, arch_curves)
+    _log_t("profiles built")
     f_y_min, f_y_max, x_min, x_max = get_outline_y_bounds(outline)
+    _log_t("y bounds built")
 
     # Build arch pad outline as continuous functions (not polygon)
     custom_boundaries = profiles.get('custom_boundaries', {})
@@ -1255,6 +1269,7 @@ def generate_insole_mesh(
     arch_pad_funcs = _build_arch_pad_functions(custom_boundaries, f_y_min, f_y_max, raw_bridges=raw_bridges)
     if arch_pad_funcs:
         profiles['arch_pad_functions'] = arch_pad_funcs
+    _log_t("arch pad funcs built")
 
     # Grid (use top outline = wider)
     outline_path = MplPath(outline)
@@ -1266,13 +1281,17 @@ def generate_insole_mesh(
         xx, yy = np.meshgrid(x_vals, y_vals)
         cands = np.column_stack([xx.ravel(), yy.ravel()])
         interior_points = cands[outline_path.contains_points(cands)]
+    _log_t(f"grid built: {len(interior_points)} interior pts")
 
     all_2d = np.vstack([outline, interior_points]) if len(interior_points) > 0 else outline
     n_total = len(all_2d)
+    _log_t(f"all_2d total: {n_total} pts")
+    _progress("Calculating heights...", 20)
     is_boundary_flags = np.zeros(n_total, dtype=bool)
     is_boundary_flags[:n_boundary] = True
 
     top_vertices = []
+    _progress_chunk = max(1, n_total // 20)  # 20 updates total during the loop
     for i, pt in enumerate(all_2d):
         x, y = pt
         z = calculate_height(
@@ -1282,6 +1301,13 @@ def generate_insole_mesh(
             is_right_foot=is_right_foot, outline=outline
         )
         top_vertices.append([x, y, z])
+        if (i + 1) % _progress_chunk == 0:
+            # Map height-calc range to 20-70%
+            pct = 20 + int(50 * (i + 1) / n_total)
+            _progress(f"Calculating heights {i+1}/{n_total}...", pct)
+            _log_t(f"calculate_height progress: {i+1}/{n_total}")
+    _log_t(f"calculate_height done: {n_total} pts")
+    _progress("Building mesh topology...", 75)
     top_vertices = np.array(top_vertices)
     # Dynamic Z-smoothing window based on resampled point density
     _avg_spacing = np.mean(np.sqrt(np.sum(np.diff(outline, axis=0)**2, axis=1)))
@@ -1289,14 +1315,19 @@ def generate_insole_mesh(
     if _smooth_window % 2 == 0:
         _smooth_window += 1
     top_vertices = _smooth_boundary_z(top_vertices, n_boundary, x_min, x_max, window=_smooth_window)
+    _log_t("smoothed boundary z")
 
     if not has_bottom_outline:
         # Original behavior: bottom uses same XY as top, Z=0
         bottom_vertices = np.column_stack([all_2d, np.zeros(n_total)])
 
         tri = Delaunay(all_2d)
-        valid_faces = [f for f in tri.simplices if point_in_polygon(all_2d[f].mean(axis=0), outline)]
-        top_faces = np.array(valid_faces)
+        _log_t(f"delaunay done: {len(tri.simplices)} faces")
+        # Vectorized triangle centroid containment test (C-level via MplPath)
+        centroids = all_2d[tri.simplices].mean(axis=1)
+        face_mask = outline_path.contains_points(centroids)
+        top_faces = tri.simplices[face_mask]
+        _log_t(f"face filter (vectorized) done: {len(top_faces)} valid faces")
 
         bottom_faces = top_faces[:, [0, 2, 1]] + n_total
         side_faces = []
@@ -1322,15 +1353,22 @@ def generate_insole_mesh(
         n_bottom_total = len(bottom_all_2d)
         bottom_vertices = np.column_stack([bottom_all_2d, np.zeros(n_bottom_total)])
 
-        # Top faces (Delaunay on top outline)
+        # Top faces (Delaunay on top outline) - vectorized centroid filter
         tri = Delaunay(all_2d)
-        valid_faces = [f for f in tri.simplices if point_in_polygon(all_2d[f].mean(axis=0), outline)]
-        top_faces = np.array(valid_faces)
+        _log_t(f"top delaunay: {len(tri.simplices)} faces")
+        top_centroids = all_2d[tri.simplices].mean(axis=1)
+        top_face_mask = outline_path.contains_points(top_centroids)
+        top_faces = tri.simplices[top_face_mask]
+        _log_t(f"top face filter done: {len(top_faces)} valid faces")
 
-        # Bottom faces (Delaunay on bottom outline)
+        # Bottom faces (Delaunay on bottom outline) - vectorized centroid filter
         tri_bottom = Delaunay(bottom_all_2d)
-        valid_bottom = [f for f in tri_bottom.simplices if point_in_polygon(bottom_all_2d[f].mean(axis=0), bottom_outline)]
-        bottom_faces = np.array(valid_bottom)[:, [0, 2, 1]] + n_total  # offset by top vertex count
+        _log_t(f"bottom delaunay: {len(tri_bottom.simplices)} faces")
+        bottom_centroids = bottom_all_2d[tri_bottom.simplices].mean(axis=1)
+        bottom_face_mask = bottom_outline_path.contains_points(bottom_centroids)
+        bottom_valid = tri_bottom.simplices[bottom_face_mask]
+        bottom_faces = bottom_valid[:, [0, 2, 1]] + n_total  # offset by top vertex count
+        _log_t(f"bottom face filter done: {len(bottom_faces)} valid faces")
 
         # Side walls: simple quads connecting top boundary to bottom boundary.
         # Each edge (i, i+1) produces 2 triangles forming a quad.
@@ -1352,22 +1390,33 @@ def generate_insole_mesh(
         all_faces = np.vstack([top_faces, bottom_faces, side_faces])
 
     mesh = trimesh.Trimesh(vertices=all_verts, faces=all_faces)
+    _log_t(f"trimesh created: {len(all_verts)} verts, {len(all_faces)} faces")
+    _progress("Finalizing mesh...", 85)
 
     mesh.merge_vertices()
+    _log_t("merge_vertices done")
     mesh.fill_holes()
+    _log_t("fill_holes done")
     mesh.fix_normals()
+    _log_t("fix_normals done")
+    _progress("Smoothing surface...", 90)
 
-    # Smoothing
+    # Smoothing: use adjacency-based approach (O(n) instead of O(n*faces))
     try:
-        interior_indices = list(range(n_boundary, n_total))
-        if interior_indices:
+        interior_set = set(range(n_boundary, n_total))
+        if interior_set:
+            from collections import defaultdict
+            v2v = defaultdict(set)
+            for face in mesh.faces:
+                for a, b in ((face[0], face[1]), (face[1], face[2]), (face[2], face[0])):
+                    v2v[a].add(b)
+                    v2v[b].add(a)
+
             v = mesh.vertices.copy()
             new_z = v[:, 2].copy()
-            for idx in interior_indices:
-                mask = np.any(mesh.faces == idx, axis=1)
-                neighbors = np.unique(mesh.faces[mask].flatten())
-                neighbors = neighbors[(neighbors != idx) & (neighbors < n_total)]
-                if len(neighbors) > 0:
+            for idx in interior_set:
+                neighbors = [n for n in v2v[idx] if n < n_total]
+                if neighbors:
                     new_z[idx] = 0.7 * v[idx, 2] + 0.3 * np.mean(v[neighbors, 2])
             v[:, 2] = new_z
             mesh.vertices = v
@@ -1431,7 +1480,8 @@ def generate_insole_from_outline(
         wall_params=wall_params,
         heel_cup_height=heel_cup_height,
         arch_curves=arch_curves,
-        bottom_outline=bottom_outline_np
+        bottom_outline=bottom_outline_np,
+        progress_callback=progress_callback
     )
 
 def export_mesh(mesh: trimesh.Trimesh, output_path: Path):

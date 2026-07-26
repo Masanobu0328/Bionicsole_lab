@@ -65,7 +65,7 @@ export default function Sidebar() {
 
     const handleApplySize = () => {
         if (outlinePoints.length > 0 && !window.confirm('既存の形状をリセットします。よろしいですか？')) return;
-        setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, outlineTargetLengthMm, 50));
+        setOutlinePoints(parseOutlineCsv(DEMO_OUTLINE_CSV, outlineTargetLengthMm, 30));
     };
 
     const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {

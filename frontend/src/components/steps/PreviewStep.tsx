@@ -6,7 +6,7 @@ import { generateInsole, getDownloadUrl, getTaskStatus, resolveApiUrl } from '@/
 import { densifyClosedPolygon } from '@/lib/geometry-utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw, FolderOpen } from 'lucide-react';
 import Canvas3D from '@/components/canvas/Canvas3D';
 
 export default function PreviewStep() {
@@ -54,6 +54,24 @@ export default function PreviewStep() {
 
     const pollingInterval = useRef<NodeJS.Timeout | null>(null);
     const pollErrorCount = useRef(0);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const blobUrlRef = useRef<string | null>(null);
+
+    const handleOpenLocalSTL = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+        const url = URL.createObjectURL(file);
+        blobUrlRef.current = url;
+        // Add extension marker via query so Canvas3D file-type detection works for blob URLs
+        const ext = file.name.toLowerCase().endsWith('.glb') ? '.glb' : '.stl';
+        setCurrentModelUrl(`${url}#dummy${ext}`);
+        e.target.value = '';
+    };
+
+    useEffect(() => () => {
+        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    }, []);
 
     // Clean up polling on unmount
     useEffect(() => {
@@ -93,13 +111,16 @@ export default function PreviewStep() {
             };
 
             // Densify outline for smooth mesh generation (control points -> smooth curve)
-            // subdivisions=15: 30pt -> 450pt, gives enough resolution for smooth arch surface.
-            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, 15);
+            // Target ~450 dense points for consistent mesh resolution regardless of editing point count.
+            const targetDense = 450;
+            const subdivisions = Math.max(1, Math.ceil(targetDense / Math.max(1, outlinePoints.length)));
+            const denseOutlinePoints = densifyClosedPolygon(outlinePoints, subdivisions);
 
             // Compute bottom outline points if enabled
             let bottomPoints: { x: number; y: number }[] | undefined;
             if (useBottomOutline && bottomOutlinePoints.length > 0) {
-                bottomPoints = densifyClosedPolygon(bottomOutlinePoints, 15);
+                const subBottom = Math.max(1, Math.ceil(targetDense / Math.max(1, bottomOutlinePoints.length)));
+                bottomPoints = densifyClosedPolygon(bottomOutlinePoints, subBottom);
             }
 
             const response = await generateInsole({
@@ -143,8 +164,11 @@ export default function PreviewStep() {
                         setStatus('completed');
 
                         // Use URLs from backend response if available
+                        const appendCacheBuster = (url: string) => {
+                            const sep = url.includes('?') ? '&' : '?';
+                            return `${url}${sep}t=${Date.now()}`;
+                        };
                         if (status.result) {
-                            const cacheBuster = `?t=${Date.now()}`;
                             const glbUrl = resolveApiUrl(status.result.download_url);
                             const stlUrl = status.result.stl_url
                                 ? resolveApiUrl(status.result.stl_url)
@@ -153,17 +177,16 @@ export default function PreviewStep() {
                                 download: glbUrl,
                                 stl: stlUrl
                             });
-                            setCurrentModelUrl(glbUrl + cacheBuster);
+                            setCurrentModelUrl(appendCacheBuster(glbUrl));
                         } else {
                             // Fallback to constructed URLs
-                            const cacheBuster = `?t=${Date.now()}`;
                             const glbUrl = getDownloadUrl(`generated_${patientId}_${side}.glb`);
                             const stlUrl = getDownloadUrl(`generated_${patientId}_${side}.stl`);
                             setResultUrls({
                                 download: glbUrl,
                                 stl: stlUrl
                             });
-                            setCurrentModelUrl(glbUrl + cacheBuster);
+                            setCurrentModelUrl(appendCacheBuster(glbUrl));
                         }
                     } else if (status.status === 'failed') {
                         if (pollingInterval.current) {
@@ -333,6 +356,26 @@ export default function PreviewStep() {
                         )}
                     </div>
                 )}
+
+                {/* Open Local STL/GLB Button */}
+                <div className="space-y-2">
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".stl,.glb,model/stl,model/gltf-binary"
+                        onChange={handleOpenLocalSTL}
+                        className="hidden"
+                    />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => fileInputRef.current?.click()}
+                    >
+                        <FolderOpen className="mr-1 h-3 w-3" />
+                        保存した STL/GLB を開く
+                    </Button>
+                </div>
 
                 {/* Back to Start Button */}
                 <div className="mt-auto pt-4">
