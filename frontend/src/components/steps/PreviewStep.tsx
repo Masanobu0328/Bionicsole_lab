@@ -51,6 +51,12 @@ export default function PreviewStep() {
     const [error, setError] = useState<string | null>(null);
     const [taskId, setTaskId] = useState<string | null>(null);
     const [activeGenerationSide, setActiveGenerationSide] = useState<'left' | 'right' | null>(null);
+    // Both feet are generated on entering this step, so results are kept per side and the
+    // viewer just switches between them instead of regenerating.
+    const [resultsBySide, setResultsBySide] = useState<Partial<Record<'left' | 'right', { download: string; stl?: string }>>>({});
+    const [displaySide, setDisplaySide] = useState<'left' | 'right'>('right');
+    const autoRunSignature = useRef<string | null>(null);
+    const autoRunning = useRef(false);
 
     const pollingInterval = useRef<NodeJS.Timeout | null>(null);
     const pollErrorCount = useRef(0);
@@ -80,8 +86,9 @@ export default function PreviewStep() {
         };
     }, []);
 
-    const handleGenerate = async (side: 'left' | 'right') => {
-        if (!selectedPatient) return;
+    // Resolves once the task finishes, so both feet can be generated one after the other.
+    const handleGenerate = async (side: 'left' | 'right'): Promise<boolean> => {
+        if (!selectedPatient) return false;
         if (pollingInterval.current) {
             clearInterval(pollingInterval.current);
             pollingInterval.current = null;
@@ -94,6 +101,10 @@ export default function PreviewStep() {
         setError(null);
         setResultUrls(null);
         setActiveGenerationSide(side);
+        setDisplaySide(side);
+
+        let settle: (ok: boolean) => void = () => { };
+        const done = new Promise<boolean>((resolve) => { settle = resolve; });
 
         try {
             const patientId = selectedPatient.id;
@@ -168,26 +179,23 @@ export default function PreviewStep() {
                             const sep = url.includes('?') ? '&' : '?';
                             return `${url}${sep}t=${Date.now()}`;
                         };
+                        let glbUrl: string;
+                        let stlUrl: string | undefined;
                         if (status.result) {
-                            const glbUrl = resolveApiUrl(status.result.download_url);
-                            const stlUrl = status.result.stl_url
+                            glbUrl = resolveApiUrl(status.result.download_url);
+                            stlUrl = status.result.stl_url
                                 ? resolveApiUrl(status.result.stl_url)
                                 : undefined;
-                            setResultUrls({
-                                download: glbUrl,
-                                stl: stlUrl
-                            });
-                            setCurrentModelUrl(appendCacheBuster(glbUrl));
                         } else {
                             // Fallback to constructed URLs
-                            const glbUrl = getDownloadUrl(`generated_${patientId}_${side}.glb`);
-                            const stlUrl = getDownloadUrl(`generated_${patientId}_${side}.stl`);
-                            setResultUrls({
-                                download: glbUrl,
-                                stl: stlUrl
-                            });
-                            setCurrentModelUrl(appendCacheBuster(glbUrl));
+                            glbUrl = getDownloadUrl(`generated_${patientId}_${side}.glb`);
+                            stlUrl = getDownloadUrl(`generated_${patientId}_${side}.stl`);
                         }
+                        const urls = { download: glbUrl, stl: stlUrl };
+                        setResultUrls(urls);
+                        setResultsBySide((current) => ({ ...current, [side]: urls }));
+                        setCurrentModelUrl(appendCacheBuster(glbUrl));
+                        settle(true);
                     } else if (status.status === 'failed') {
                         if (pollingInterval.current) {
                             clearInterval(pollingInterval.current);
@@ -195,6 +203,7 @@ export default function PreviewStep() {
                         }
                         setError(status.message || 'Generation failed');
                         setStatus('error');
+                        settle(false);
                     }
                 } catch (pollError: any) {
                     pollErrorCount.current += 1;
@@ -211,6 +220,7 @@ export default function PreviewStep() {
                             setError(message || 'Failed to poll generation status.');
                         }
                         setStatus('error');
+                        settle(false);
                     }
                 }
             };
@@ -224,7 +234,74 @@ export default function PreviewStep() {
             console.error(err);
             setError(err.message || 'An error occurred during generation.');
             setStatus('error');
+            settle(false);
         }
+
+        return done;
+    };
+
+    // Auto-generate both feet on entering this step. Re-runs when anything that affects the
+    // mesh changes, so what is on screen always matches the current settings. The signature
+    // keeps it from regenerating when the user merely navigates back and forth.
+    const generationSignature = JSON.stringify({
+        patientId: selectedPatient?.id,
+        flipOrientation,
+        outlinePoints,
+        bottomOutlinePoints: useBottomOutline ? bottomOutlinePoints : null,
+        landmarkConfig,
+        widthConfig,
+        archSettingsRight,
+        archSettingsLeft,
+        archCurves,
+        baseThickness,
+        wallHeightOffset,
+        heelCupHeight,
+        medialWallHeight,
+        medialWallPeakX,
+        lateralWallHeight,
+        lateralWallPeakX,
+        archScale,
+        enableLattice,
+        latticeCellSize,
+        strutRadius,
+    });
+
+    useEffect(() => {
+        if (!selectedPatient) return;
+        if (outlinePoints.length === 0) return;
+        if (autoRunSignature.current === generationSignature) return;
+        if (autoRunning.current) return;
+
+        autoRunSignature.current = generationSignature;
+        autoRunning.current = true;
+        let cancelled = false;
+
+        (async () => {
+            setResultsBySide({});
+            // Sequential: the backend runs one task at a time, and the progress bar tracks one.
+            for (const side of ['right', 'left'] as const) {
+                if (cancelled) break;
+                await handleGenerate(side);
+            }
+            if (!cancelled) setDisplaySide('right');
+            autoRunning.current = false;
+        })();
+
+        return () => {
+            cancelled = true;
+            autoRunning.current = false;
+        };
+        // handleGenerate is recreated every render; the signature is the real trigger.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [generationSignature, selectedPatient?.id]);
+
+    const showSide = (side: 'left' | 'right') => {
+        const urls = resultsBySide[side];
+        if (!urls) return;
+        setDisplaySide(side);
+        setResultUrls(urls);
+        const sep = urls.download.includes('?') ? '&' : '?';
+        setCurrentModelUrl(`${urls.download}${sep}t=${Date.now()}`);
     };
 
     if (!selectedPatient) {
@@ -241,18 +318,22 @@ export default function PreviewStep() {
         <div className="h-full flex gap-4 p-4">
             {/* Side Panel - Controls */}
             <div className="w-64 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
-                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">生成</h3>
+                <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">生成</h3>
+                    <span className="text-[10px] text-muted-foreground">両足を自動生成します</span>
+                </div>
 
                 {/* Left Foot */}
                 <div
-                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${activeGenerationSide === 'left'
+                    onClick={() => showSide('left')}
+                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${displaySide === 'left'
                         ? 'border-orange-500/50 bg-orange-500/10'
                         : 'border-border hover:border-border/80 bg-card'
                         }`}
                 >
                     <div className="flex items-center justify-between mb-2">
                         <span className="font-medium text-sm">左足</span>
-                        {status === 'completed' && activeGenerationSide === 'left' && (
+                        {resultsBySide.left && (
                             <CheckCircle2 className="text-green-500 h-4 w-4" />
                         )}
                     </div>
@@ -262,28 +343,29 @@ export default function PreviewStep() {
                     <Button
                         className="w-full"
                         size="sm"
-                        variant={activeGenerationSide === 'left' ? 'default' : 'outline'}
-                        onClick={() => handleGenerate('left')}
+                        variant={displaySide === 'left' ? 'default' : 'outline'}
+                        onClick={(e) => { e.stopPropagation(); handleGenerate('left'); }}
                         disabled={status === 'processing'}
                     >
                         {status === 'processing' && activeGenerationSide === 'left' ? (
                             <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> 生成中</>
                         ) : (
-                            <><FileText className="mr-1 h-3 w-3" /> 生成</>
+                            <><FileText className="mr-1 h-3 w-3" /> 再生成</>
                         )}
                     </Button>
                 </div>
 
                 {/* Right Foot */}
                 <div
-                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${activeGenerationSide === 'right'
+                    onClick={() => showSide('right')}
+                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${displaySide === 'right'
                         ? 'border-blue-500/50 bg-blue-500/10'
                         : 'border-border hover:border-border/80 bg-card'
                         }`}
                 >
                     <div className="flex items-center justify-between mb-2">
                         <span className="font-medium text-sm">右足</span>
-                        {status === 'completed' && activeGenerationSide === 'right' && (
+                        {resultsBySide.right && (
                             <CheckCircle2 className="text-green-500 h-4 w-4" />
                         )}
                     </div>
@@ -293,14 +375,14 @@ export default function PreviewStep() {
                     <Button
                         className="w-full"
                         size="sm"
-                        variant={activeGenerationSide === 'right' ? 'default' : 'outline'}
-                        onClick={() => handleGenerate('right')}
+                        variant={displaySide === 'right' ? 'default' : 'outline'}
+                        onClick={(e) => { e.stopPropagation(); handleGenerate('right'); }}
                         disabled={status === 'processing'}
                     >
                         {status === 'processing' && activeGenerationSide === 'right' ? (
                             <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> 生成中</>
                         ) : (
-                            <><FileText className="mr-1 h-3 w-3" /> 生成</>
+                            <><FileText className="mr-1 h-3 w-3" /> 再生成</>
                         )}
                     </Button>
                 </div>
@@ -403,7 +485,7 @@ export default function PreviewStep() {
                                     <img src="/logo.png" alt="Bionic Sole" className="h-24 w-auto mx-auto drop-shadow-xl" />
                                 </div>
                                 <p className="text-white text-lg font-bold tracking-wide drop-shadow-md">
-                                    左側のパネルから<span className="text-teal-400">足を選択</span>して<span className="text-teal-400">「生成」ボタン</span>を押してください
+                                    <span className="text-teal-400">両足を自動生成中</span>です。完了後、左側のパネルで<span className="text-teal-400">左右を切り替え</span>られます
                                 </p>
                             </div>
                         </div>
