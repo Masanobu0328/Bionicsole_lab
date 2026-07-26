@@ -200,6 +200,30 @@ def _calculate_arch_height(x: float, start: float, peak: float, end: float, max_
         return max_height * (1 - t)
 
 
+BAND_PLATEAU_DROP = 0.15
+BAND_T_REF = 6.0
+
+
+def _band_profile_height(t: float, max_height: float,
+                         plateau_drop: float = BAND_PLATEAU_DROP) -> float:
+    """アーチ帯の断面高さ。外側境界(t=0)からFlat境界(t=1)を経て内側(t>1)へ。
+
+    以前は 0<=t<=1 を smoothstep、t>1 を最大高さで平坦にしていたが、smoothstep は
+    両端で傾きが 0 になるため t=1 で曲線が一度水平になり、そこに目に見える棚が
+    できていた。さらに t>1 が完全な平坦域になるため上から見ると台形になっていた。
+
+    継ぎ目の無い単一の指数曲線に置き換える。外側境界で最も急、内側へ行くほど
+    連続的に緩くなり、傾きが 0 になる点も平坦域も生じない。
+
+        t=0 -> 0.000  t=0.5 -> 0.613  t=1 -> 0.850  t=2 -> 0.978  t=3 -> 0.997
+    """
+    if t <= 0.0:
+        return 0.0
+    d = min(max(float(plateau_drop), 1e-6), 0.99)
+    capped = min(float(t), BAND_T_REF)
+    return max_height * (1.0 - d ** capped) / (1.0 - d ** BAND_T_REF)
+
+
 def _build_detail_spline(settings: dict, landmark_settings: dict = None):
     """詳細設定が有効な場合、内側アーチ用のCubicSplineを構築して返す。
     制御点: [(start,0), (subtalar,h0), (navicular,h1), (cuneiform,h2), (m5,h3), (end,0)]
@@ -377,6 +401,10 @@ def create_profile_interpolators(arch_settings: dict = None, landmark_settings: 
                 elif curve_type == 'transverse' or curve_type == 'transverseFlat':
                     # Transverse is a closed polygon, densify via Catmull-Rom for smooth boundary
                     poly_points = [[p['x'], p['y']] for p in points]
+                    if curve_type == 'transverse':
+                        # The arch pad loop needs T3 raw to bridge lateralBridge(->T4) and
+                        # metatarsalBridge(T2->), which otherwise short-cut past it.
+                        raw_bridges['transverse'] = poly_points
                     try:
                         dense_points = _densify_closed_polygon(poly_points)
                         custom_boundaries[curve_type] = MplPath(dense_points)
@@ -589,10 +617,17 @@ def _build_arch_pad_functions(custom_boundaries: dict, f_y_min, f_y_max, raw_bri
     # 3. lateralBridge (L4 -> B1 -> T4)
     control_points.extend(lateral_bridge)
 
-    # 4. metatarsalBridge (T4 -> T3 -> T2 -> MB1 -> M7)
+    # 4. transverse T3, bridging lateralBridge's end (T4) to metatarsalBridge's start (T2).
+    #    Without it the loop cuts the corner straight from T4 to T2, which shows up as a
+    #    kink on the toe side of the arch pad outline.
+    transverse_pts = (raw_bridges or {}).get('transverse')
+    if transverse_pts and len(transverse_pts) >= 5:
+        control_points.append(list(transverse_pts[3]))
+
+    # 5. metatarsalBridge (T2 -> MB1 -> M7)
     control_points.extend(metatarsal_bridge)
 
-    # 5. Inner outline: metatarsalBridge last -> heelBridge first (f_y_min, reversed)
+    # 6. Inner outline: metatarsalBridge last -> heelBridge first (f_y_min, reversed)
     inner_start_x = metatarsal_bridge[-1][0]
     inner_end_x = heel_bridge[0][0]
     if abs(inner_end_x - inner_start_x) > 0.1:
@@ -810,8 +845,7 @@ def calculate_height(
                         denom = y_in - y_out
                         if abs(denom) > 0.01:
                             t = (y - y_out) / denom
-                            if 0 <= t <= 1: medial_h = medial_height_mm * (t * t * (3 - 2 * t))
-                            elif t > 1: medial_h = medial_height_mm
+                            medial_h = _band_profile_height(t, medial_height_mm)
                 except: pass
 
             if use_custom_lateral:
@@ -823,8 +857,7 @@ def calculate_height(
                         denom = y_in - y_out
                         if abs(denom) > 0.01:
                             t = (y - y_out) / denom
-                            if 0 <= t <= 1: lateral_h = lateral_height_mm * (t * t * (3 - 2 * t))
-                            elif t > 1: lateral_h = lateral_height_mm
+                            lateral_h = _band_profile_height(t, lateral_height_mm)
                 except: pass
 
             # Fallback to percentage-based calculation when custom boundary returns NaN
