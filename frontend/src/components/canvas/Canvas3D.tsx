@@ -1,8 +1,8 @@
 'use client';
 
-import React, { Suspense, useRef, useEffect, useState, useMemo } from 'react';
-import { Canvas, useThree, extend, useFrame } from '@react-three/fiber';
-import { Center, Grid, Environment, OrbitControls, Bounds, useBounds, shaderMaterial } from '@react-three/drei';
+import React, { Suspense, useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
+import { Canvas, useThree, extend } from '@react-three/fiber';
+import { Grid, Environment, OrbitControls, shaderMaterial } from '@react-three/drei';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as THREE from 'three';
@@ -97,16 +97,22 @@ declare global {
     }
 }
 
-// Component to trigger bounds fit on load
-function BoundsRefresher() {
-    const api = useBounds();
-    useEffect(() => {
-        api?.refresh().clip().fit();
-    }, [api]);
-    return null;
-}
+type ModelBounds = {
+    center: THREE.Vector3;
+    radius: number;
+};
 
-function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: string | null, baseThickness: number, onDimensionsCalculated: (dim: THREE.Vector3) => void }) {
+function InsoleModel({
+    url,
+    baseThickness,
+    onDimensionsCalculated,
+    onBoundsCalculated,
+}: {
+    url: string | null;
+    baseThickness: number;
+    onDimensionsCalculated: (dim: THREE.Vector3) => void;
+    onBoundsCalculated: (bounds: ModelBounds) => void;
+}) {
     const meshRef = useRef<THREE.Mesh>(null);
     const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
 
@@ -116,10 +122,13 @@ function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: stri
             return;
         }
 
+        let cancelled = false;
         console.log("Loading 3D Model from:", url);
         const isGLB = url.toLowerCase().split('?')[0].endsWith('.glb');
 
         const handleGeometry = (geo: THREE.BufferGeometry) => {
+            if (cancelled) return;
+
             // FIX: Do NOT use geo.center() as it centers Z axis too, breaking height map calculations.
             // We want X and Y centered, but Z to start at 0 (bottom aligned to floor).
             geo.computeBoundingBox();
@@ -136,6 +145,18 @@ function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: stri
                 const size = new THREE.Vector3();
                 geo.boundingBox.getSize(size);
                 onDimensionsCalculated(size);
+
+                // Orbiting happens after the mesh rotation, so calculate the bounds in the
+                // displayed coordinate system instead of using the bottom-aligned local origin.
+                const displayBox = geo.boundingBox.clone().applyMatrix4(
+                    new THREE.Matrix4().makeRotationX(-Math.PI / 2)
+                );
+                const displayCenter = displayBox.getCenter(new THREE.Vector3());
+                const displaySize = displayBox.getSize(new THREE.Vector3());
+                onBoundsCalculated({
+                    center: displayCenter,
+                    radius: displaySize.length() / 2,
+                });
             }
             geo.computeVertexNormals();
             setGeometry(geo);
@@ -158,7 +179,11 @@ function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: stri
                 handleGeometry(geo);
             }, undefined, (e) => console.error('Error loading STL:', e));
         }
-    }, [url, onDimensionsCalculated]);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [url, onDimensionsCalculated, onBoundsCalculated]);
 
     const materialProps = useMemo(() => ({
         uBaseThickness: baseThickness,
@@ -173,13 +198,12 @@ function InsoleModel({ url, baseThickness, onDimensionsCalculated }: { url: stri
 
     return (
         <group>
-            <mesh ref={meshRef} geometry={geometry} castShadow receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
+            <mesh ref={meshRef} geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
                 <heightHeatmapMaterial {...materialProps} />
             </mesh>
             <mesh geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
                 <meshBasicMaterial color="white" wireframe transparent opacity={0.1} />
             </mesh>
-            <BoundsRefresher />
         </group>
     );
 }
@@ -193,8 +217,52 @@ function LoadingFallback() {
     );
 }
 
-function SceneSetup() {
-    return null;
+function ModelOrbitControls({ bounds }: { bounds: ModelBounds | null }) {
+    const controlsRef = useRef<React.ElementRef<typeof OrbitControls>>(null);
+    const { camera, size } = useThree();
+    const minDistance = bounds ? Math.max(10, bounds.radius * 1.1) : 10;
+
+    const fitDistance = useMemo(() => {
+        if (!bounds || !(camera instanceof THREE.PerspectiveCamera)) return minDistance;
+
+        const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+        const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+        const limitingFov = Math.min(verticalFov, horizontalFov);
+        return Math.max(minDistance, (bounds.radius * 1.5) / Math.sin(limitingFov / 2));
+    }, [bounds, camera, minDistance, size.width, size.height]);
+
+    const maxDistance = Math.max(500, fitDistance * 2);
+
+    useLayoutEffect(() => {
+        const controls = controlsRef.current;
+        if (!bounds || !controls || !(camera instanceof THREE.PerspectiveCamera)) return;
+
+        const viewDirection = camera.position.clone().sub(controls.target);
+
+        if (viewDirection.lengthSq() === 0) viewDirection.set(0, 1, 1);
+        viewDirection.normalize();
+
+        controls.target.copy(bounds.center);
+        camera.position.copy(bounds.center).addScaledVector(viewDirection, fitDistance);
+        camera.near = Math.max(0.1, minDistance - bounds.radius * 1.05);
+        camera.far = maxDistance + bounds.radius * 2;
+        camera.updateProjectionMatrix();
+        controls.update();
+    }, [bounds, camera, fitDistance, maxDistance, minDistance]);
+
+    return (
+        <OrbitControls
+            ref={controlsRef}
+            makeDefault
+            enableDamping
+            dampingFactor={0.1}
+            rotateSpeed={0.5}
+            panSpeed={0.5}
+            zoomSpeed={0.8}
+            minDistance={minDistance}
+            maxDistance={maxDistance}
+        />
+    );
 }
 
 // city preset HDR is fetched from an external CDN; if it's unreachable
@@ -217,20 +285,19 @@ export default function Canvas3D() {
     const currentModelUrl = useStore((state) => state.currentModelUrl);
     const baseThickness = useStore((state) => state.baseThickness);
     const [dimensions, setDimensions] = useState<THREE.Vector3 | null>(null);
+    const [modelBounds, setModelBounds] = useState<ModelBounds | null>(null);
 
     useEffect(() => {
-        if (!currentModelUrl) setDimensions(null);
+        setDimensions(null);
+        setModelBounds(null);
     }, [currentModelUrl]);
 
     return (
         <div className="absolute inset-0 w-full h-full relative">
             <Canvas
-                shadows
                 gl={{ antialias: true, preserveDrawingBuffer: true }}
                 camera={{ fov: 45, position: [0, 80, 120] }}
             >
-                <SceneSetup />
-
                 <ambientLight intensity={0.6} />
                 <directionalLight position={[50, 100, 50]} intensity={1.2} />
                 <EnvironmentErrorBoundary>
@@ -255,26 +322,16 @@ export default function Canvas3D() {
                 <axesHelper args={[50]} />
 
                 <Suspense fallback={<LoadingFallback />}>
-                    <Bounds fit clip observe margin={1.5}>
-                        <InsoleModel
-                            key={currentModelUrl}
-                            url={currentModelUrl}
-                            baseThickness={baseThickness}
-                            onDimensionsCalculated={setDimensions}
-                        />
-                    </Bounds>
+                    <InsoleModel
+                        key={currentModelUrl}
+                        url={currentModelUrl}
+                        baseThickness={baseThickness}
+                        onDimensionsCalculated={setDimensions}
+                        onBoundsCalculated={setModelBounds}
+                    />
                 </Suspense>
 
-                <OrbitControls
-                    makeDefault
-                    enableDamping
-                    dampingFactor={0.1}
-                    rotateSpeed={0.5}
-                    panSpeed={0.5}
-                    zoomSpeed={0.8}
-                    minDistance={10}
-                    maxDistance={500}
-                />
+                <ModelOrbitControls bounds={modelBounds} />
             </Canvas>
 
             {currentModelUrl && dimensions && (
