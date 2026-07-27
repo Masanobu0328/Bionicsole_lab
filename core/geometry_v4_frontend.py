@@ -2,7 +2,7 @@
 
 import numpy as np
 from scipy.interpolate import CubicSpline, interp1d, LinearNDInterpolator
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, cKDTree
 import trimesh
 from matplotlib.path import Path as MplPath
 import datetime
@@ -561,37 +561,24 @@ def _densify_closed_polygon(points: list, subdivisions: int = 8) -> list:
     return result
 
 
-def _distance_to_polygon_edge(x: float, y: float, polygon_path: MplPath) -> float:
-    """ポリゴン境界までの最短距離を返す（線分投影ベース）"""
-    verts = polygon_path.vertices
-    n = len(verts)
-    px, py = x, y
-    min_dist_sq = float('inf')
-    for i in range(n):
-        ax, ay = verts[i]
-        bx, by = verts[(i + 1) % n]
-        dx, dy = bx - ax, by - ay
-        len_sq = dx * dx + dy * dy
-        if len_sq < 1e-12:
-            dist_sq = (px - ax) ** 2 + (py - ay) ** 2
-        else:
-            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
-            proj_x = ax + t * dx
-            proj_y = ay + t * dy
-            dist_sq = (px - proj_x) ** 2 + (py - proj_y) ** 2
-        if dist_sq < min_dist_sq:
-            min_dist_sq = dist_sq
-    return float(np.sqrt(min_dist_sq))
+def _distance_to_polygon_edge(x: float, y: float, polygon_region: dict) -> float:
+    """Return the shortest distance to a prepared closed polygon boundary."""
+    offsets = np.array([x, y]) - polygon_region['segment_starts']
+    segment_vectors = polygon_region['segment_vectors']
+    length_sq = polygon_region['segment_length_sq']
+    projections = np.divide(
+        np.einsum('ij,ij->i', offsets, segment_vectors),
+        length_sq,
+        out=np.zeros_like(length_sq),
+        where=length_sq > 1e-12
+    )
+    projections = np.clip(projections, 0.0, 1.0)
+    residuals = offsets - projections[:, None] * segment_vectors
+    return float(np.sqrt(np.min(np.einsum('ij,ij->i', residuals, residuals))))
 
 
-def _build_arch_pad_functions(custom_boundaries: dict, f_y_min, f_y_max, raw_bridges: dict = None) -> Optional[dict]:
-    """アーチパッド輪郭を連続関数として構築する（ポリゴンではなく）。
-
-    ポリゴンの直線辺ではなく interp1d 連続関数を使うことで、
-    アーチ高さと同様に滑らかな境界を実現する。
-
-    Returns: dict with pad_y_inner(x), pad_y_outer(x), pad_x_min, pad_x_max
-    """
+def _build_arch_pad_region(custom_boundaries: dict, f_y_min, f_y_max, raw_bridges: dict = None) -> Optional[dict]:
+    """Build the prepared closed polygon used by the arch pad micro floor."""
     heel_bridge = (raw_bridges or {}).get('heelBridge') or custom_boundaries.get('heelBridge')
     lateral_bridge = (raw_bridges or {}).get('lateralBridge') or custom_boundaries.get('lateralBridge')
     metatarsal_bridge = (raw_bridges or {}).get('metatarsalBridge') or custom_boundaries.get('metatarsalBridge')
@@ -639,60 +626,40 @@ def _build_arch_pad_functions(custom_boundaries: dict, f_y_min, f_y_max, raw_bri
         return None
 
     try:
-        # Step 2: Catmull-Rom densification (same as frontend getSmoothPath)
-        smooth_points = _densify_closed_polygon(control_points, subdivisions=8)
-
-        # Step 3: Extract Y boundaries as functions of X via ray-casting
-        xs_all = [p[0] for p in smooth_points]
-        pad_x_min = min(xs_all)
-        pad_x_max = max(xs_all)
-
-        n_func_samples = 200
-        sample_xs = np.linspace(pad_x_min, pad_x_max, n_func_samples)
-        y_inner_vals = []
-        y_outer_vals = []
-        valid_xs = []
-
-        n_sp = len(smooth_points)
-        for sx in sample_xs:
-            intersections = []
-            for i in range(n_sp):
-                p1 = smooth_points[i]
-                p2 = smooth_points[(i + 1) % n_sp]
-                x1, x2 = p1[0], p2[0]
-                if (x1 <= sx <= x2) or (x2 <= sx <= x1):
-                    dx = x2 - x1
-                    if abs(dx) > 1e-10:
-                        t = (sx - x1) / dx
-                        if 0 <= t <= 1:
-                            intersections.append(p1[1] + t * (p2[1] - p1[1]))
-            if len(intersections) >= 2:
-                valid_xs.append(sx)
-                y_inner_vals.append(min(intersections))
-                y_outer_vals.append(max(intersections))
-
-        if len(valid_xs) < 4:
+        boundary_points = np.asarray(
+            _densify_closed_polygon(control_points, subdivisions=8),
+            dtype=float
+        )
+        if len(boundary_points) < 3:
             return None
 
-        valid_xs = np.array(valid_xs)
-        y_inner_vals = np.array(y_inner_vals)
-        y_outer_vals = np.array(y_outer_vals)
-
-        pad_y_inner = interp1d(valid_xs, y_inner_vals, kind='cubic',
-                               bounds_error=False, fill_value=np.nan)
-        pad_y_outer = interp1d(valid_xs, y_outer_vals, kind='cubic',
-                               bounds_error=False, fill_value=np.nan)
-
-        log_debug(f"[ARCH_PAD_FUNC] {len(control_points)} ctrl -> {len(smooth_points)} smooth -> {len(valid_xs)} func samples, X=[{pad_x_min:.1f}, {pad_x_max:.1f}]")
+        segment_starts = boundary_points
+        segment_vectors = np.roll(boundary_points, -1, axis=0) - boundary_points
+        segment_length_sq = np.einsum(
+            'ij,ij->i', segment_vectors, segment_vectors
+        )
+        bounds_min = boundary_points.min(axis=0)
+        bounds_max = boundary_points.max(axis=0)
+        log_debug(
+            f"[ARCH_PAD_REGION] {len(control_points)} ctrl -> "
+            f"{len(boundary_points)} boundary points"
+        )
 
         return {
-            'pad_y_inner': pad_y_inner,
-            'pad_y_outer': pad_y_outer,
-            'pad_x_min': float(valid_xs[0]),
-            'pad_x_max': float(valid_xs[-1])
+            'path': MplPath(boundary_points),
+            'boundary_points': boundary_points,
+            'segment_starts': segment_starts,
+            'segment_vectors': segment_vectors,
+            'segment_length_sq': segment_length_sq,
+            'bounds': (
+                float(bounds_min[0]),
+                float(bounds_min[1]),
+                float(bounds_max[0]),
+                float(bounds_max[1])
+            )
         }
     except Exception as e:
-        print(f"[WARN] Failed to build arch pad functions: {e}")
+        print(f"[WARN] Failed to build arch pad region: {e}")
         return None
 
 
@@ -950,12 +917,14 @@ def calculate_height(
         arch_height = max(longitudinal_arch_height, transverse_arch_height)
 
         # Micro-height floor for arch pad area (prevents dip to 0mm between arches)
-        # Uses continuous functions (interp1d) instead of polygon for smooth boundaries
-        arch_pad_funcs = profiles.get('arch_pad_functions')
-        if arch_pad_funcs is not None:
-            y_inner = float(arch_pad_funcs['pad_y_inner'](x))
-            y_outer = float(arch_pad_funcs['pad_y_outer'](x))
-            if not (np.isnan(y_inner) or np.isnan(y_outer)) and y_inner <= y <= y_outer:
+        arch_pad_region = profiles.get('arch_pad_region')
+        if arch_pad_region is not None:
+            pad_x_min, pad_y_min, pad_x_max, pad_y_max = arch_pad_region['bounds']
+            in_pad_bounds = (
+                pad_x_min <= x <= pad_x_max and
+                pad_y_min <= y <= pad_y_max
+            )
+            if in_pad_bounds and arch_pad_region['path'].contains_point((x, y)):
                 micro_height_x = max(arch_inner, arch_outer, arch_transverse)
                 if micro_height_x > 0:
                     max_arch_h = max(
@@ -966,13 +935,9 @@ def calculate_height(
                     normalized = min(1.0, micro_height_x / max_arch_h)
                     micro_height = 0.4 * normalized
 
-                    # Distance to nearest boundary (continuous, not polygon edge)
-                    dist_to_inner = abs(y - y_inner)
-                    dist_to_outer = abs(y - y_outer)
-                    dist_to_x_start = x - arch_pad_funcs['pad_x_min']
-                    dist_to_x_end = arch_pad_funcs['pad_x_max'] - x
-                    dist_to_edge = min(dist_to_inner, dist_to_outer,
-                                       dist_to_x_start, dist_to_x_end)
+                    dist_to_edge = _distance_to_polygon_edge(
+                        x, y, arch_pad_region
+                    )
 
                     falloff_dist = 3.0
                     if dist_to_edge < falloff_dist:
@@ -1230,6 +1195,136 @@ def _compute_auto_bottom_outline(
 # メッシュ生成
 # =============================================================================
 
+def _sample_polyline_by_spacing(points: np.ndarray, spacing: float, closed: bool = False) -> np.ndarray:
+    """Sample a polyline so no generated segment is longer than spacing."""
+    points = np.asarray(points, dtype=float)
+    if len(points) < 2:
+        return points.copy()
+
+    segment_count = len(points) if closed else len(points) - 1
+    sampled = []
+    for i in range(segment_count):
+        start = points[i]
+        end = points[(i + 1) % len(points)]
+        length = float(np.linalg.norm(end - start))
+        steps = max(1, int(np.ceil(length / spacing)))
+        for step in range(steps):
+            sampled.append(start + (end - start) * (step / steps))
+    if not closed:
+        sampled.append(points[-1])
+    return np.asarray(sampled, dtype=float)
+
+
+def _sample_function_by_spacing(
+    function: callable,
+    x_start: float,
+    x_end: float,
+    spacing: float
+) -> np.ndarray:
+    """Evaluate a Y(X) curve and then enforce spacing along its XY arc."""
+    sample_count = max(2, int(np.ceil((x_end - x_start) / spacing)) + 1)
+    sample_xs = np.linspace(x_start, x_end, sample_count)
+    sample_ys = np.asarray(function(sample_xs), dtype=float)
+    polyline = np.column_stack([sample_xs, sample_ys])
+    polyline = polyline[np.isfinite(polyline).all(axis=1)]
+    return _sample_polyline_by_spacing(polyline, spacing)
+
+
+def _deduplicate_feature_points(
+    points: np.ndarray,
+    existing_points: np.ndarray,
+    tolerance: float
+) -> np.ndarray:
+    """Keep feature points separated from existing points and from each other."""
+    if len(points) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    finite_points = np.asarray(points, dtype=float)
+    finite_points = finite_points[np.isfinite(finite_points).all(axis=1)]
+    if len(finite_points) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    if len(existing_points) > 0:
+        distances, _ = cKDTree(existing_points).query(finite_points, k=1)
+        finite_points = finite_points[distances >= tolerance]
+
+    accepted = []
+    buckets = {}
+    for point in finite_points:
+        cell = tuple(np.floor(point / tolerance).astype(np.int64))
+        is_duplicate = False
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for accepted_idx in buckets.get((cell[0] + dx, cell[1] + dy), ()):
+                    if np.linalg.norm(point - accepted[accepted_idx]) < tolerance:
+                        is_duplicate = True
+                        break
+                if is_duplicate:
+                    break
+            if is_duplicate:
+                break
+        if not is_duplicate:
+            accepted_idx = len(accepted)
+            accepted.append(point)
+            buckets.setdefault(cell, []).append(accepted_idx)
+
+    return np.asarray(accepted, dtype=float).reshape(-1, 2)
+
+
+def _sample_triangulation_features(
+    profiles: dict,
+    outline: np.ndarray,
+    outline_path: MplPath,
+    grid_spacing: float
+) -> Tuple[np.ndarray, float]:
+    """Sample height-field boundaries as explicit triangulation vertices."""
+    feature_spacing = float(grid_spacing) * 0.45
+    if feature_spacing <= 0:
+        return np.empty((0, 2), dtype=float), feature_spacing
+
+    sampled_groups = []
+    arch_pad_region = profiles.get('arch_pad_region')
+    if arch_pad_region:
+        sampled_groups.append(
+            _sample_polyline_by_spacing(
+                arch_pad_region['boundary_points'],
+                feature_spacing,
+                closed=True
+            )
+        )
+
+    custom_boundaries = profiles.get('custom_boundaries', {})
+    for curve_name in ('medial', 'medialFlat', 'lateral', 'lateralFlat'):
+        curve = custom_boundaries.get(curve_name)
+        curve_xs = getattr(curve, 'x', None)
+        if curve is None or curve_xs is None or len(curve_xs) < 2:
+            continue
+        x_start = float(np.min(curve_xs))
+        x_end = float(np.max(curve_xs))
+        sampled_groups.append(
+            _sample_function_by_spacing(curve, x_start, x_end, feature_spacing)
+        )
+
+    for curve_name in ('transverse', 'transverseFlat'):
+        polygon = custom_boundaries.get(curve_name)
+        if isinstance(polygon, MplPath) and len(polygon.vertices) >= 3:
+            sampled_groups.append(
+                _sample_polyline_by_spacing(polygon.vertices, feature_spacing, closed=True)
+            )
+
+    if not sampled_groups:
+        return np.empty((0, 2), dtype=float), feature_spacing
+
+    feature_points = np.vstack(sampled_groups)
+    feature_points = feature_points[np.isfinite(feature_points).all(axis=1)]
+    feature_points = feature_points[outline_path.contains_points(feature_points)]
+    dedup_tolerance = feature_spacing * 0.25
+    feature_points = _deduplicate_feature_points(
+        feature_points, outline, dedup_tolerance
+    )
+    return feature_points, feature_spacing
+
+
 def generate_insole_mesh(
     outline: np.ndarray,
     base_thickness: float = 3.0,
@@ -1296,13 +1391,15 @@ def generate_insole_mesh(
     f_y_min, f_y_max, x_min, x_max = get_outline_y_bounds(outline)
     _log_t("y bounds built")
 
-    # Build arch pad outline as continuous functions (not polygon)
+    # Build the prepared closed polygon for the arch pad floor and feature line.
     custom_boundaries = profiles.get('custom_boundaries', {})
     raw_bridges = profiles.get('raw_bridges', {})
-    arch_pad_funcs = _build_arch_pad_functions(custom_boundaries, f_y_min, f_y_max, raw_bridges=raw_bridges)
-    if arch_pad_funcs:
-        profiles['arch_pad_functions'] = arch_pad_funcs
-    _log_t("arch pad funcs built")
+    arch_pad_region = _build_arch_pad_region(
+        custom_boundaries, f_y_min, f_y_max, raw_bridges=raw_bridges
+    )
+    if arch_pad_region:
+        profiles['arch_pad_region'] = arch_pad_region
+    _log_t("arch pad region built")
 
     # Grid (use top outline = wider)
     outline_path = MplPath(outline)
@@ -1316,7 +1413,24 @@ def generate_insole_mesh(
         interior_points = cands[outline_path.contains_points(cands)]
     _log_t(f"grid built: {len(interior_points)} interior pts")
 
-    all_2d = np.vstack([outline, interior_points]) if len(interior_points) > 0 else outline
+    feature_points, feature_spacing = _sample_triangulation_features(
+        profiles, outline, outline_path, grid_spacing
+    )
+    if len(feature_points) > 0 and len(interior_points) > 0:
+        dedup_tolerance = feature_spacing * 0.25
+        distances, _ = cKDTree(feature_points).query(interior_points, k=1)
+        interior_points = interior_points[distances >= dedup_tolerance]
+    _log_t(
+        f"feature curves built: {len(feature_points)} pts "
+        f"(spacing={feature_spacing:.3f}mm)"
+    )
+
+    point_groups = [outline]
+    if len(feature_points) > 0:
+        point_groups.append(feature_points)
+    if len(interior_points) > 0:
+        point_groups.append(interior_points)
+    all_2d = np.vstack(point_groups)
     n_total = len(all_2d)
     _log_t(f"all_2d total: {n_total} pts")
     _progress("Calculating heights...", 20)
@@ -1374,7 +1488,8 @@ def generate_insole_mesh(
         all_faces = np.vstack([top_faces, bottom_faces, side_faces])
     else:
         # Separate bottom outline: bottom boundary uses bottom_outline XY, Z=0
-        # Interior points: filter by bottom outline
+        # Feature points describe top-surface ridges, so the independent flat
+        # bottom intentionally keeps only its uniform interior grid.
         bottom_outline_path = MplPath(bottom_outline)
         bottom_interior_mask = np.ones(len(interior_points), dtype=bool)
         if len(interior_points) > 0:
