@@ -9,6 +9,34 @@ import { Progress } from '@/components/ui/progress';
 import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw, FolderOpen } from 'lucide-react';
 import Canvas3D from '@/components/canvas/Canvas3D';
 
+type FootSide = 'left' | 'right';
+type GenerationStatus = 'idle' | 'processing' | 'completed' | 'error';
+type ResultUrls = { download: string; stl?: string };
+type SideGenerationState = {
+    status: GenerationStatus;
+    progress: number;
+    message: string;
+    error: string | null;
+    taskId: string | null;
+};
+
+const initialAutoGenerationState = (): Record<FootSide, SideGenerationState> => ({
+    left: {
+        status: 'processing',
+        progress: 0,
+        message: '右足の完了後に生成します...',
+        error: null,
+        taskId: null,
+    },
+    right: {
+        status: 'processing',
+        progress: 0,
+        message: '生成を開始しています...',
+        error: null,
+        taskId: null,
+    },
+});
+
 export default function PreviewStep() {
     const {
         patients,
@@ -44,24 +72,30 @@ export default function PreviewStep() {
     // (Zustand getters don't work as expected, so we compute it here)
     const selectedPatient = patients.find(p => p.id === patientId);
 
-    const [status, setStatus] = useState<'idle' | 'processing' | 'completed' | 'error'>('idle');
-    const [progress, setProgress] = useState(0);
-    const [progressMessage, setProgressMessage] = useState('');
-    const [resultUrls, setResultUrls] = useState<{ download: string; stl?: string } | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    const [taskId, setTaskId] = useState<string | null>(null);
-    const [activeGenerationSide, setActiveGenerationSide] = useState<'left' | 'right' | null>(null);
-    // Both feet are generated on entering this step, so results are kept per side and the
-    // viewer just switches between them instead of regenerating.
-    const [resultsBySide, setResultsBySide] = useState<Partial<Record<'left' | 'right', { download: string; stl?: string }>>>({});
-    const [displaySide, setDisplaySide] = useState<'left' | 'right'>('right');
-    const autoRunSignature = useRef<string | null>(null);
-    const autoRunning = useRef(false);
+    const [generationBySide, setGenerationBySide] = useState(initialAutoGenerationState);
+    const [resultsBySide, setResultsBySide] = useState<Partial<Record<FootSide, ResultUrls>>>({});
+    const [displaySide, setDisplaySide] = useState<FootSide>('right');
+    const autoRunStarted = useRef(false);
 
-    const pollingInterval = useRef<NodeJS.Timeout | null>(null);
-    const pollErrorCount = useRef(0);
+    const pollingTimeouts = useRef<Partial<Record<FootSide, NodeJS.Timeout>>>({});
+    const pollErrorCounts = useRef<Record<FootSide, number>>({ left: 0, right: 0 });
+    const generationTokens = useRef<Record<FootSide, number>>({ left: 0, right: 0 });
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const blobUrlRef = useRef<string | null>(null);
+    const resultUrls = resultsBySide[displaySide] ?? null;
+
+    const updateGeneration = (side: FootSide, update: Partial<SideGenerationState>) => {
+        setGenerationBySide((current) => ({
+            ...current,
+            [side]: { ...current[side], ...update },
+        }));
+    };
+
+    const clearPolling = (side: FootSide) => {
+        const timeout = pollingTimeouts.current[side];
+        if (timeout) clearTimeout(timeout);
+        delete pollingTimeouts.current[side];
+    };
 
     const handleOpenLocalSTL = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -79,32 +113,41 @@ export default function PreviewStep() {
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
     }, []);
 
-    // Clean up polling on unmount
+    // Clean up both independent pollers on unmount.
     useEffect(() => {
         return () => {
-            if (pollingInterval.current) clearInterval(pollingInterval.current);
+            generationTokens.current.left += 1;
+            generationTokens.current.right += 1;
+            clearPolling('left');
+            clearPolling('right');
         };
     }, []);
 
-    // Resolves once the task finishes, so both feet can be generated one after the other.
-    const handleGenerate = async (side: 'left' | 'right'): Promise<boolean> => {
+    // Each side owns its task state and poller. This lets the completed right model remain
+    // interactive while the left task continues in the background.
+    const handleGenerate = async (side: FootSide, showWhenComplete = true): Promise<boolean> => {
         if (!selectedPatient) return false;
-        if (pollingInterval.current) {
-            clearInterval(pollingInterval.current);
-            pollingInterval.current = null;
-        }
-        pollErrorCount.current = 0;
+        clearPolling(side);
+        pollErrorCounts.current[side] = 0;
+        const generationToken = generationTokens.current[side] + 1;
+        generationTokens.current[side] = generationToken;
 
-        setStatus('processing');
-        setProgress(0);
-        setProgressMessage('Initializing generation...');
-        setError(null);
-        setResultUrls(null);
-        setActiveGenerationSide(side);
-        setDisplaySide(side);
+        updateGeneration(side, {
+            status: 'processing',
+            progress: 0,
+            message: '生成を開始しています...',
+            error: null,
+            taskId: null,
+        });
+        setResultsBySide((current) => {
+            const next = { ...current };
+            delete next[side];
+            return next;
+        });
 
         let settle: (ok: boolean) => void = () => { };
         const done = new Promise<boolean>((resolve) => { settle = resolve; });
+        const isCurrentGeneration = () => generationTokens.current[side] === generationToken;
 
         try {
             const patientId = selectedPatient.id;
@@ -157,22 +200,22 @@ export default function PreviewStep() {
             });
 
             const taskId = response.task_id;
-            setTaskId(taskId);
+            if (!isCurrentGeneration()) return false;
+            updateGeneration(side, { taskId });
 
             // Poll for task completion
             const pollTask = async () => {
                 try {
                     const status = await getTaskStatus(taskId);
-                    pollErrorCount.current = 0;
-                    setProgress(status.progress);
-                    setProgressMessage(status.message);
+                    if (!isCurrentGeneration()) return;
+                    pollErrorCounts.current[side] = 0;
+                    updateGeneration(side, {
+                        progress: status.progress,
+                        message: '3Dモデルを生成しています...',
+                    });
 
                     if (status.status === 'completed') {
-                        if (pollingInterval.current) {
-                            clearInterval(pollingInterval.current);
-                            pollingInterval.current = null;
-                        }
-                        setStatus('completed');
+                        clearPolling(side);
 
                         // Use URLs from backend response if available
                         const appendCacheBuster = (url: string) => {
@@ -192,114 +235,109 @@ export default function PreviewStep() {
                             stlUrl = getDownloadUrl(`generated_${patientId}_${side}.stl`);
                         }
                         const urls = { download: glbUrl, stl: stlUrl };
-                        setResultUrls(urls);
                         setResultsBySide((current) => ({ ...current, [side]: urls }));
-                        setCurrentModelUrl(appendCacheBuster(glbUrl));
+                        updateGeneration(side, {
+                            status: 'completed',
+                            progress: 100,
+                            message: '生成が完了しました',
+                            error: null,
+                        });
+                        if (showWhenComplete) {
+                            setDisplaySide(side);
+                            setCurrentModelUrl(appendCacheBuster(glbUrl));
+                        }
                         settle(true);
                     } else if (status.status === 'failed') {
-                        if (pollingInterval.current) {
-                            clearInterval(pollingInterval.current);
-                            pollingInterval.current = null;
-                        }
-                        setError(status.message || 'Generation failed');
-                        setStatus('error');
+                        clearPolling(side);
+                        updateGeneration(side, {
+                            status: 'error',
+                            error: '生成に失敗しました。再生成してください。',
+                        });
                         settle(false);
+                    } else {
+                        pollingTimeouts.current[side] = setTimeout(pollTask, 500);
                     }
                 } catch (pollError: any) {
-                    pollErrorCount.current += 1;
-                    setProgressMessage('Connection issue. Retrying...');
-                    if (pollErrorCount.current >= 3) {
-                        if (pollingInterval.current) {
-                            clearInterval(pollingInterval.current);
-                            pollingInterval.current = null;
-                        }
+                    if (!isCurrentGeneration()) return;
+                    pollErrorCounts.current[side] += 1;
+                    updateGeneration(side, { message: '接続を再試行しています...' });
+                    if (pollErrorCounts.current[side] >= 3) {
+                        clearPolling(side);
                         const message = String(pollError?.message || '');
                         if (message.includes('(404)')) {
-                            setError('Task not found. Backend may have restarted. Please regenerate.');
+                            updateGeneration(side, {
+                                status: 'error',
+                                error: '生成タスクが見つかりません。再生成してください。',
+                            });
                         } else {
-                            setError(message || 'Failed to poll generation status.');
+                            updateGeneration(side, {
+                                status: 'error',
+                                error: '生成状況を取得できませんでした。',
+                            });
                         }
-                        setStatus('error');
                         settle(false);
+                    } else {
+                        pollingTimeouts.current[side] = setTimeout(pollTask, 500);
                     }
                 }
             };
 
-            // Start polling every 500ms
-            pollingInterval.current = setInterval(pollTask, 500);
-            // Also poll immediately
+            // Poll immediately; subsequent polls are scheduled after each response.
             await pollTask();
 
         } catch (err: any) {
             console.error(err);
-            setError(err.message || 'An error occurred during generation.');
-            setStatus('error');
+            if (!isCurrentGeneration()) return false;
+            updateGeneration(side, {
+                status: 'error',
+                error: '生成中にエラーが発生しました。',
+            });
             settle(false);
         }
 
         return done;
     };
 
-    // Auto-generate both feet on entering this step. Re-runs when anything that affects the
-    // mesh changes, so what is on screen always matches the current settings. The signature
-    // keeps it from regenerating when the user merely navigates back and forth.
-    const generationSignature = JSON.stringify({
-        patientId: selectedPatient?.id,
-        flipOrientation,
-        outlinePoints,
-        bottomOutlinePoints: useBottomOutline ? bottomOutlinePoints : null,
-        landmarkConfig,
-        widthConfig,
-        archSettingsRight,
-        archSettingsLeft,
-        archCurves,
-        baseThickness,
-        wallHeightOffset,
-        heelCupHeight,
-        medialWallHeight,
-        medialWallPeakX,
-        lateralWallHeight,
-        lateralWallPeakX,
-        archScale,
-        enableLattice,
-        latticeCellSize,
-        strutRadius,
-    });
-
+    // Run once per PreviewStep mount. A remount means the user left and re-entered the step.
     useEffect(() => {
         if (!selectedPatient) return;
         if (outlinePoints.length === 0) return;
-        if (autoRunSignature.current === generationSignature) return;
-        if (autoRunning.current) return;
+        if (autoRunStarted.current) return;
 
-        autoRunSignature.current = generationSignature;
-        autoRunning.current = true;
+        autoRunStarted.current = true;
         let cancelled = false;
 
-        (async () => {
-            setResultsBySide({});
-            // Sequential: the backend runs one task at a time, and the progress bar tracks one.
-            for (const side of ['right', 'left'] as const) {
-                if (cancelled) break;
-                await handleGenerate(side);
-            }
-            if (!cancelled) setDisplaySide('right');
-            autoRunning.current = false;
-        })();
+        // Deferring one tick prevents React Strict Mode's mount check from submitting a
+        // duplicate backend task; its first effect pass is cleaned up before this runs.
+        const startTimeout = setTimeout(() => {
+            void (async () => {
+                setResultsBySide({});
+                setGenerationBySide(initialAutoGenerationState());
+                setDisplaySide('right');
+
+                const rightCompleted = await handleGenerate('right', true);
+                if (cancelled) return;
+
+                // The backend remains sequential, but the left poller no longer controls the
+                // viewer. The right model is therefore usable throughout left generation.
+                void handleGenerate('left', !rightCompleted);
+            })();
+        }, 0);
 
         return () => {
             cancelled = true;
-            autoRunning.current = false;
+            clearTimeout(startTimeout);
+            autoRunStarted.current = false;
         };
-        // handleGenerate is recreated every render; the signature is the real trigger.
+        // An empty dependency list makes step entry, rather than settings changes, the trigger.
+        // Resetting the ref in cleanup also supports React Strict Mode's mount check.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [generationSignature, selectedPatient?.id]);
+    }, []);
 
-    const showSide = (side: 'left' | 'right') => {
+    const showSide = (side: FootSide) => {
         const urls = resultsBySide[side];
-        if (!urls) return;
+        if (!urls || generationBySide[side].status !== 'completed') return;
         setDisplaySide(side);
-        setResultUrls(urls);
         const sep = urls.download.includes('?') ? '&' : '?';
         setCurrentModelUrl(`${urls.download}${sep}t=${Date.now()}`);
     };
@@ -326,7 +364,10 @@ export default function PreviewStep() {
                 {/* Left Foot */}
                 <div
                     onClick={() => showSide('left')}
-                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${displaySide === 'left'
+                    className={`p-3 rounded-lg border-2 transition-all ${resultsBySide.left && generationBySide.left.status === 'completed'
+                        ? 'cursor-pointer'
+                        : 'cursor-not-allowed'
+                        } ${displaySide === 'left' && resultsBySide.left
                         ? 'border-orange-500/50 bg-orange-500/10'
                         : 'border-border hover:border-border/80 bg-card'
                         }`}
@@ -345,20 +386,36 @@ export default function PreviewStep() {
                         size="sm"
                         variant={displaySide === 'left' ? 'default' : 'outline'}
                         onClick={(e) => { e.stopPropagation(); handleGenerate('left'); }}
-                        disabled={status === 'processing'}
+                        disabled={generationBySide.left.status === 'processing'}
                     >
-                        {status === 'processing' && activeGenerationSide === 'left' ? (
+                        {generationBySide.left.status === 'processing' ? (
                             <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> 生成中</>
                         ) : (
                             <><FileText className="mr-1 h-3 w-3" /> 再生成</>
                         )}
                     </Button>
+                    {generationBySide.left.status === 'processing' && (
+                        <div className="mt-2 space-y-1">
+                            <div className="text-xs text-muted-foreground">{generationBySide.left.message}</div>
+                            <Progress value={generationBySide.left.progress} className="h-1.5" />
+                            <div className="text-xs text-muted-foreground text-right">{generationBySide.left.progress}%</div>
+                        </div>
+                    )}
+                    {generationBySide.left.status === 'error' && (
+                        <div className="mt-2 flex items-start gap-1 text-xs text-destructive">
+                            <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                            <span>{generationBySide.left.error}</span>
+                        </div>
+                    )}
                 </div>
 
                 {/* Right Foot */}
                 <div
                     onClick={() => showSide('right')}
-                    className={`p-3 rounded-lg border-2 transition-all cursor-pointer ${displaySide === 'right'
+                    className={`p-3 rounded-lg border-2 transition-all ${resultsBySide.right && generationBySide.right.status === 'completed'
+                        ? 'cursor-pointer'
+                        : 'cursor-not-allowed'
+                        } ${displaySide === 'right' && resultsBySide.right
                         ? 'border-blue-500/50 bg-blue-500/10'
                         : 'border-border hover:border-border/80 bg-card'
                         }`}
@@ -377,40 +434,31 @@ export default function PreviewStep() {
                         size="sm"
                         variant={displaySide === 'right' ? 'default' : 'outline'}
                         onClick={(e) => { e.stopPropagation(); handleGenerate('right'); }}
-                        disabled={status === 'processing'}
+                        disabled={generationBySide.right.status === 'processing'}
                     >
-                        {status === 'processing' && activeGenerationSide === 'right' ? (
+                        {generationBySide.right.status === 'processing' ? (
                             <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> 生成中</>
                         ) : (
                             <><FileText className="mr-1 h-3 w-3" /> 再生成</>
                         )}
                     </Button>
+                    {generationBySide.right.status === 'processing' && (
+                        <div className="mt-2 space-y-1">
+                            <div className="text-xs text-muted-foreground">{generationBySide.right.message}</div>
+                            <Progress value={generationBySide.right.progress} className="h-1.5" />
+                            <div className="text-xs text-muted-foreground text-right">{generationBySide.right.progress}%</div>
+                        </div>
+                    )}
+                    {generationBySide.right.status === 'error' && (
+                        <div className="mt-2 flex items-start gap-1 text-xs text-destructive">
+                            <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                            <span>{generationBySide.right.error}</span>
+                        </div>
+                    )}
                 </div>
 
-                {/* Progress */}
-                {status === 'processing' && (
-                    <div className="p-3 rounded-lg bg-card border border-border">
-                        <div className="text-xs text-muted-foreground mb-1">{progressMessage}</div>
-                        <Progress value={progress} className="h-1.5" />
-                        <div className="text-xs text-muted-foreground mt-1 text-right">{progress}%</div>
-                    </div>
-                )}
-
-                {/* Error */}
-                {status === 'error' && (
-                    <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
-                        <div className="flex items-start gap-2">
-                            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 flex-shrink-0" />
-                            <div>
-                                <div className="text-xs font-medium text-destructive">エラー</div>
-                                <div className="text-xs text-destructive/80">{error}</div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
                 {/* Download Buttons */}
-                {status === 'completed' && resultUrls && (
+                {resultUrls && (
                     <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 space-y-2">
                         <div className="text-xs font-medium text-green-500 flex items-center gap-1">
                             <CheckCircle2 className="h-3 w-3" /> ダウンロード
@@ -478,25 +526,25 @@ export default function PreviewStep() {
                     <Canvas3D />
 
                     {/* Overlay when no model */}
-                    {!currentModelUrl && status !== 'processing' && (
+                    {!currentModelUrl && generationBySide.right.status !== 'processing' && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[2px] z-10 pointer-events-none">
                             <div className="text-center p-6 w-full">
                                 <div className="mb-4">
                                     <img src="/logo.png" alt="Bionic Sole" className="h-24 w-auto mx-auto drop-shadow-xl" />
                                 </div>
                                 <p className="text-white text-lg font-bold tracking-wide drop-shadow-md">
-                                    <span className="text-teal-400">両足を自動生成中</span>です。完了後、左側のパネルで<span className="text-teal-400">左右を切り替え</span>られます
+                                    <span className="text-teal-400">右足を生成しています</span>。完了後すぐに3Dモデルを表示します
                                 </p>
                             </div>
                         </div>
                     )}
 
                     {/* Processing overlay */}
-                    {status === 'processing' && (
+                    {generationBySide.right.status === 'processing' && (
                         <div className="absolute inset-0 flex items-center justify-center bg-background/80">
                             <div className="text-center p-6">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />
-                                <p className="text-muted-foreground text-sm">{progressMessage}</p>
+                                <p className="text-muted-foreground text-sm">{generationBySide.right.message}</p>
                             </div>
                         </div>
                     )}
