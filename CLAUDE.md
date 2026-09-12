@@ -1,5 +1,30 @@
 # CLAUDE.md - Claude Code専用指示
 
+---
+
+## 最優先: ここは入れ子のリポジトリです
+
+`masacad/` はそれ自体が独立した git リポジトリで、**本番はこちらからデプロイされます**。
+
+| パス | remote | デプロイ先 |
+|------|--------|-----------|
+| `insole-ai-design/` | `insole-ai-design` | **なし** |
+| `insole-ai-design/masacad/` | `Bionicsole_lab` | Vercel (frontend) / Railway (backend) |
+
+外側のリポジトリも同じファイルを追跡しているので、**外側で `git add masacad/...` すると成功し、push も通り、本番には永遠に届きません**。
+
+**Why:** 2026-09-12 に実際に起きました。セッション中の全作業を外側にコミットして「push 完了」と報告し続けていたが、本番は7週間前のコミットを配信したままだった。
+
+**How to apply:**
+
+- コミットは必ず `cd masacad` してから。外側には pre-commit フックを入れてあるので `masacad/` を含むコミットは拒否される
+- 作業前に `git -C masacad remote -v` で `Bionicsole_lab` を確認する
+- 「デプロイした」と言う前に、**本番が実際にどのコミットを出しているかを確かめる**（`scripts/check-deploy-sync.sh`）
+- エンジン（Python）の変更は **Railway 側の再デプロイ**が必要。フロントだけ出しても形は変わらない
+
+---
+
+
 Claude Codeは設計・相談・大規模実装・リファクタリングを担当する。
 共通ルールは **RULES.md** を参照すること。
 
