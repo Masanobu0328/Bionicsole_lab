@@ -19,8 +19,9 @@ const LANDMARK_LIST = [
     { id: 'navicular', label: '舟状骨 (Navicular)' },
     { id: 'cuboid', label: '立方骨 (Cuboid)' },
     { id: 'medial_cuneiform', label: '楔状骨 (Cuneiform)' },
-    { id: 'metatarsal', label: '中足骨 (Metatarsal)' },
+    { id: 'metatarsal', label: '中足骨頭 (Metatarsal head / M7)' },
 ];
+
 
 export default function Sidebar() {
     const store = useStore();
@@ -40,6 +41,11 @@ export default function Sidebar() {
         baseThickness, setBaseThickness,
         wallHeightOffset, setWallHeightOffset,
         heelCupHeight, setHeelCupHeight,
+        bottomRounding, setBottomRounding,
+        wallDishReach, setWallDishReach,
+        medialBandDropBias, setMedialBandDropBias,
+        lateralBandDropBias, setLateralBandDropBias,
+        wallFirstStageDeg, setWallFirstStageDeg,
         medialWallHeight, setMedialWallHeight,
         medialWallPeakX, setMedialWallPeakX,
         lateralWallHeight, setLateralWallHeight,
@@ -190,6 +196,15 @@ export default function Sidebar() {
                             <Slider value={[heelCupHeight]} onValueChange={([v]) => setHeelCupHeight(v)} min={0} max={15} step={0.5} />
                         </div>
 
+                        <div className="space-y-1">
+                            <div className="flex justify-between">
+                                <Label className="text-xs">底面の角の丸み</Label>
+                                <span className="text-xs font-mono">{bottomRounding}mm</span>
+                            </div>
+                            <Slider value={[bottomRounding]} onValueChange={([v]) => setBottomRounding(v)} min={0} max={10} step={0.1} />
+                            <p className="text-[10px] text-muted-foreground">壁のある範囲だけ、底面と側面の90度の角を削って丸めます。上面の形状は変わりません。</p>
+                        </div>
+
                         <div className="pt-2 border-t space-y-3">
                             <Label className="text-[10px] uppercase text-muted-foreground">内側壁 (Medial Wall)</Label>
                             <div className="space-y-1">
@@ -323,6 +338,88 @@ export default function Sidebar() {
                                 />
                             </div>
                         </div>
+
+                        <div className="pt-4 border-t space-y-1">
+                            <div className="flex justify-between">
+                                <Label className="text-xs">底面の角の丸み</Label>
+                                <span className="text-xs font-mono">{bottomRounding}mm</span>
+                            </div>
+                            <Slider value={[bottomRounding]} onValueChange={([v]) => setBottomRounding(v)} min={0} max={10} step={0.1} />
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>← 角を残す</span>
+                                <span>丸みを強める →</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <div className="flex justify-between">
+                                <Label className="text-xs">ヒールカップの皿の広がり</Label>
+                                <span className="text-xs font-mono">{wallDishReach}mm</span>
+                            </div>
+                            <Slider
+                                value={[wallDishReach]}
+                                onValueChange={([v]) => setWallDishReach(v)}
+                                min={6}
+                                max={24}
+                                step={0.5}
+                            />
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>← 皿を浅く・狭く</span>
+                                <span>皿を中心まで広げる →</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <div className="flex justify-between">
+                                <Label className="text-xs">内側アーチの落ち方（破線→実線）</Label>
+                                <span className="text-xs font-mono">{medialBandDropBias.toFixed(1)}</span>
+                            </div>
+                            <Slider
+                                value={[medialBandDropBias]}
+                                onValueChange={([v]) => setMedialBandDropBias(v)}
+                                min={1}
+                                max={3.5}
+                                step={0.1}
+                            />
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>← 実線側で急に落ちる</span>
+                                <span>破線側で急に落ちる →</span>
+                            </div>
+                            <div className="flex justify-between pt-1">
+                                <Label className="text-xs">外側アーチの落ち方</Label>
+                                <span className="text-xs font-mono">{lateralBandDropBias.toFixed(1)}</span>
+                            </div>
+                            <Slider
+                                value={[lateralBandDropBias]}
+                                onValueChange={([v]) => setLateralBandDropBias(v)}
+                                min={1}
+                                max={3.5}
+                                step={0.1}
+                            />
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>← 実線側で急に落ちる</span>
+                                <span>破線側で急に落ちる →</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <div className="flex justify-between">
+                                <Label className="text-xs">底面から立ち上がる角度（1段目）</Label>
+                                <span className="text-xs font-mono">{wallFirstStageDeg.toFixed(0)}度</span>
+                            </div>
+                            <Slider
+                                value={[wallFirstStageDeg]}
+                                onValueChange={([v]) => setWallFirstStageDeg(v)}
+                                min={0}
+                                max={15}
+                                step={1}
+                            />
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>← 寝かせる（厚くなる）</span>
+                                <span>立てる（薄くなる） →</span>
+                            </div>
+                        </div>
+
                     </div>
                 );
             case STEPS.PREVIEW:

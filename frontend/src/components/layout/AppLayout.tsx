@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, LogOut, Redo, Save, Undo } from 'lucide-react';
+import { redo, undo, useHistoryStore } from '@/lib/history';
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/lib/store';
 import { supabase } from '@/lib/supabase';
@@ -14,8 +15,23 @@ export default function Layout({
     sidebar: React.ReactNode;
 }) {
     const { savePatientPreset, patientId } = useStore();
+    const canUndo = useHistoryStore((s) => s.canUndo);
+    const canRedo = useHistoryStore((s) => s.canRedo);
     const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [isSigningOut, setIsSigningOut] = useState(false);
+
+    // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z, skipped while a text field has focus.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+            const el = document.activeElement as HTMLElement | null;
+            if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+            e.preventDefault();
+            if (e.shiftKey) redo(); else undo();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, []);
 
     const handleSave = async () => {
         if (!patientId) {
@@ -59,11 +75,25 @@ export default function Layout({
 
                 <div className="flex items-center gap-2">
                     <div className="mr-2 flex items-center gap-1 border-r border-border pr-2">
-                        <Button variant="ghost" size="icon" disabled>
-                            <Undo className="h-4 w-4 text-muted-foreground" />
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={!canUndo}
+                            onClick={undo}
+                            title="Undo (Ctrl+Z)"
+                            aria-label="Undo"
+                        >
+                            <Undo className={`h-4 w-4 ${canUndo ? 'text-white' : 'text-muted-foreground'}`} />
                         </Button>
-                        <Button variant="ghost" size="icon" disabled>
-                            <Redo className="h-4 w-4 text-muted-foreground" />
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={!canRedo}
+                            onClick={redo}
+                            title="Redo (Ctrl+Shift+Z)"
+                            aria-label="Redo"
+                        >
+                            <Redo className={`h-4 w-4 ${canRedo ? 'text-white' : 'text-muted-foreground'}`} />
                         </Button>
                     </div>
 

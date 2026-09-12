@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Loader2, Download, AlertCircle, FileText, CheckCircle2, RotateCcw, FolderOpen } from 'lucide-react';
 import Canvas3D from '@/components/canvas/Canvas3D';
+import { effectiveCurvesForSettings } from '@/lib/arch-geometry';
 
 type FootSide = 'left' | 'right';
 type GenerationStatus = 'idle' | 'processing' | 'completed' | 'error';
@@ -54,6 +55,11 @@ export default function PreviewStep() {
         baseThickness,
         wallHeightOffset,
         heelCupHeight,
+        bottomRounding,
+        wallDishReach,
+        medialBandDropBias,
+        lateralBandDropBias,
+        wallFirstStageDeg,
         medialWallHeight,
         medialWallPeakX,
         lateralWallHeight,
@@ -157,6 +163,12 @@ export default function PreviewStep() {
 
             // Map settings (if needed) - currently just passing through
             const mappedArchSettings = { ...selectedSettings };
+            const effectiveArchCurves = effectiveCurvesForSettings(
+                archCurves,
+                selectedSettings,
+                outlinePoints,
+                landmarkConfig,
+            );
 
             // Merge landmarkConfig and widthConfig for backend
             const mergedLandmarkConfig = {
@@ -195,8 +207,13 @@ export default function PreviewStep() {
                 strut_radius: strutRadius,
                 outline_points: denseOutlinePoints,
                 landmark_config: mergedLandmarkConfig,
-                arch_curves: archCurves || undefined,
-                bottom_outline_points: bottomPoints
+                arch_curves: effectiveArchCurves || undefined,
+                bottom_outline_points: bottomPoints,
+                bottom_rounding_mm: bottomRounding,
+                wall_dish_reach_mm: wallDishReach,
+                medial_band_drop_bias: medialBandDropBias,
+                lateral_band_drop_bias: lateralBandDropBias,
+                wall_first_stage_deg: wallFirstStageDeg
             });
 
             const taskId = response.task_id;

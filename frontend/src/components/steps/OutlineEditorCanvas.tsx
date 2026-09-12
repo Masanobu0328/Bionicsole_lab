@@ -99,7 +99,15 @@ export default function OutlineEditorCanvas() {
             const img = new Image();
             img.onload = () => {
                 setOutlineImageSize({ width: img.naturalWidth / 5, height: img.naturalHeight / 5 });
-                setIsImageEditMode(true);
+                // Only open image positioning when there is no outline to work on yet -
+                // that is a photo that has just been brought in. This effect also runs on
+                // every mount, so leaving for another step and coming back used to drop
+                // the user into image editing on top of an outline they wanted to edit.
+                // Read the store at callback time: this fires asynchronously and the
+                // effect deliberately depends on the image alone.
+                if (useStore.getState().outlinePoints.length < 3) {
+                    setIsImageEditMode(true);
+                }
             };
             img.src = outlineImage;
         }
