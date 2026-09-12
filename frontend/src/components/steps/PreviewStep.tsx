@@ -305,9 +305,15 @@ export default function PreviewStep() {
         } catch (err: any) {
             console.error(err);
             if (!isCurrentGeneration()) return false;
+            // Show what went wrong. This used to be a fixed sentence with the real
+            // error left in console.error, so the screen said nothing useful and a
+            // failure could not be reported without opening devtools.
+            const reason = String(err?.message || err || '').slice(0, 300);
             updateGeneration(side, {
                 status: 'error',
-                error: '生成中にエラーが発生しました。',
+                error: reason
+                    ? `生成中にエラーが発生しました。${reason}`
+                    : '生成中にエラーが発生しました。',
             });
             settle(false);
         }

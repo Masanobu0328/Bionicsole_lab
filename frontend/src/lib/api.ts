@@ -429,8 +429,19 @@ export async function generateInsole(params: InsoleParams): Promise<GenerateResp
     });
 
     if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate insole');
+        // Say what actually came back. A bare "Failed to generate insole" told the
+        // user nothing and threw away the status and the body, so a failure could
+        // only be diagnosed from the browser console.
+        let detail = '';
+        try {
+            const errorData = await response.json();
+            detail = typeof errorData?.detail === 'string'
+                ? errorData.detail
+                : JSON.stringify(errorData?.detail ?? errorData);
+        } catch {
+            detail = (await response.text().catch(() => '')).slice(0, 300);
+        }
+        throw new Error(`(${response.status}) ${detail || response.statusText}`.trim());
     }
 
     return response.json() as Promise<GenerateResponse>;
