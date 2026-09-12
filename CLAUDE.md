@@ -2,6 +2,31 @@
 
 ---
 
+## 本番 URL（これ一つだけ）
+
+```
+https://frontend-smoky-one-57.vercel.app
+```
+
+Vercel にはドメインが3つあるが、**一般に開けるのはこれだけ**。
+
+| ドメイン | 状態 |
+|-----------|------|
+| `frontend-smoky-one-57.vercel.app` | **200 公開。これが本番** |
+| `frontend-masanobu890328-2052s-projects.vercel.app` | 302 → Vercel SSO。Vercel ログインが必要 |
+| `frontend-git-main-...vercel.app` | 302 → Vercel SSO。同上 |
+
+バックエンド: `https://web-production-339a7.up.railway.app`（Railway、`main` から自動デプロイ）
+
+**Supabase の認証設定をこれに合わせること。** Site URL / Redirect URLs に本番 URL が無いと、
+Google ログイン後に Supabase が Site URL（= localhost）へ返してしまい、web 単体で完結しなくなる。
+
+https://supabase.com/dashboard/project/owunqmyphmulwpdmpcci/auth/url-configuration
+
+---
+
+---
+
 ## 最優先: ここは入れ子のリポジトリです
 
 `masacad/` はそれ自体が独立した git リポジトリで、**本番はこちらからデプロイされます**。

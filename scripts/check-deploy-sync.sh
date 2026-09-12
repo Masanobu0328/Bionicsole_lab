@@ -39,3 +39,10 @@ fi
 echo
 echo "Remember: the Python engine ships with the BACKEND. A frontend-only deploy"
 echo "leaves the insole geometry unchanged."
+echo
+echo "Production URL (the only publicly reachable one - the other two Vercel"
+echo "domains redirect to Vercel SSO):"
+echo "  https://frontend-smoky-one-57.vercel.app"
+printf "  reachable: "
+curl -s -o /dev/null -w "%{http_code}
+" --max-time 15 https://frontend-smoky-one-57.vercel.app || echo "(offline)"
