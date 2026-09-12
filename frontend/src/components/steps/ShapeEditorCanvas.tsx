@@ -31,6 +31,8 @@ export default function ShapeEditorCanvas() {
   const {
     baseThickness,
     heelCupHeight,
+    bottomRounding,
+    outlinePoints,
     medialWallHeight,
     medialWallPeakX,
     lateralWallHeight,
@@ -72,24 +74,49 @@ export default function ShapeEditorCanvas() {
     return Math.max(0, Math.min(100, Math.round(rawPct * 10) / 10));
   };
 
-  const handleMouseDown = (side: 'medial' | 'lateral', id: string) => {
+  // Cursor position in SVG units. width="100%" means the on-screen size and the
+  // viewBox differ, so the ratio has to be applied.
+  const toSvgPoint = useCallback(
+    (side: 'medial' | 'lateral', e: { clientX: number; clientY: number }) => {
+      const svg = side === 'medial' ? svgRefMedial.current : svgRefLateral.current;
+      if (!svg) return null;
+      const rect = svg.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) * (VIEW_WIDTH / rect.width),
+        y: (e.clientY - rect.top) * (VIEW_HEIGHT / rect.height),
+      };
+    },
+    [],
+  );
+
+  // Where inside the handle the drag started. The hit target is a transparent
+  // circle of radius 18, deliberately generous so the point is easy to grab - but
+  // the height and x were read straight off the cursor, so grabbing anywhere but
+  // the exact centre threw the point by up to those 18 units (about 2.3% of foot
+  // length) on the first mousemove. Holding the offset keeps it under the cursor.
+  const grabOffsetRef = useRef({ x: 0, y: 0 });
+
+  const handleMouseDown = (
+    side: 'medial' | 'lateral',
+    id: string,
+    e: React.MouseEvent,
+    pointPx: { x: number; y: number },
+  ) => {
+    const cursor = toSvgPoint(side, e);
+    grabOffsetRef.current = cursor
+      ? { x: cursor.x - pointPx.x, y: cursor.y - pointPx.y }
+      : { x: 0, y: 0 };
     setDraggingPoint({ side, id });
   };
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!draggingPoint) return;
 
-    const svg = draggingPoint.side === 'medial' ? svgRefMedial.current : svgRefLateral.current;
-    if (!svg) return;
+    const cursor = toSvgPoint(draggingPoint.side, e);
+    if (!cursor) return;
 
-    const rect = svg.getBoundingClientRect();
-    // SVGの表示サイズと内部座標系のスケーリング補正
-    // (ここではwidth="100%"なので、getBoundingClientRectとviewBoxの比率を見る必要がある)
-    const scaleX = VIEW_WIDTH / rect.width;
-    const scaleY = VIEW_HEIGHT / rect.height;
-
-    const xPx = (e.clientX - rect.left) * scaleX;
-    const yPx = (e.clientY - rect.top) * scaleY;
+    const xPx = cursor.x - grabOffsetRef.current.x;
+    const yPx = cursor.y - grabOffsetRef.current.y;
 
     const valX = pxToPct(xPx);
     const absHeightMm = pxToMm(yPx); // 底面からの絶対高さ
@@ -110,7 +137,7 @@ export default function ShapeEditorCanvas() {
         setLateralWallPeakX(valX);
       }
     }
-  }, [draggingPoint, baseThickness, setHeelCupHeight, setMedialWallHeight, setMedialWallPeakX, setLateralWallHeight, setLateralWallPeakX]);
+  }, [draggingPoint, baseThickness, toSvgPoint, setHeelCupHeight, setMedialWallHeight, setMedialWallPeakX, setLateralWallHeight, setLateralWallPeakX]);
 
   const handleMouseUp = useCallback(() => {
     setDraggingPoint(null);
@@ -162,8 +189,29 @@ export default function ShapeEditorCanvas() {
     // peak -> wallEnd: 曲線 (二次ベジェ、ベースへ滑らかに着地)
     // wallEnd -> 100: 水平 (ベース高さ)
     
+    // Rounded bottom edge. In this longitudinal elevation the fillet is only
+    // visible at the back of the heel (x=0%), where its inward normal lies in the
+    // plane of the view. Radius fade mirrors _bottom_rounding_radii() in
+    // core/geometry_v4_frontend.py.
+    const ROUND_WALL_FULL_MM = 1.5;
+    const ROUND_MAX_FRACTION = 0.7;
+    const heelRoundMm = bottomRounding <= 0 ? 0 : (() => {
+        const fullAt = Math.max(ROUND_WALL_FULL_MM, bottomRounding);
+        const wall = Math.max(0, heelY_abs - baseThickness);
+        const t = Math.max(0, Math.min(1, wall / fullAt));
+        return Math.min(bottomRounding * t * t * (3 - 2 * t), heelY_abs * ROUND_MAX_FRACTION);
+    })();
+    const footLengthMm = outlinePoints.length > 0
+        ? Math.max(...outlinePoints.map(pt => pt.x)) - Math.min(...outlinePoints.map(pt => pt.x))
+        : 260;
+    const heelRoundPct = footLengthMm > 0 ? (heelRoundMm / footLengthMm) * 100 : 0;
+    const heelArcRx = Math.abs(pctToPx(heelRoundPct) - pctToPx(0));
+    const heelArcRy = Math.abs(mmToPx(0) - mmToPx(heelRoundMm));
+
     const pathData = `
-      M ${pctToPx(0)} ${mmToPx(heelY_abs)}
+      M ${pctToPx(heelRoundPct)} ${mmToPx(0)}
+      A ${heelArcRx} ${heelArcRy} 0 0 1 ${pctToPx(0)} ${mmToPx(heelRoundMm)}
+      L ${pctToPx(0)} ${mmToPx(heelY_abs)}
       L ${pctToPx(heelEnd)} ${mmToPx(heelY_abs)}
       Q ${pctToPx(heelEnd + (peakX - heelEnd) * 0.5)} ${mmToPx(Math.max(heelY_abs, peakY_abs))} 
         ${pctToPx(peakX)} ${mmToPx(peakY_abs)}
@@ -176,7 +224,7 @@ export default function ShapeEditorCanvas() {
     const areaPathData = `
       ${pathData}
       L ${pctToPx(100)} ${mmToPx(0)}
-      L ${pctToPx(0)} ${mmToPx(0)}
+      L ${pctToPx(heelRoundPct)} ${mmToPx(0)}
       Z
     `;
 
@@ -304,7 +352,7 @@ export default function ShapeEditorCanvas() {
             {points.map(pt => (
                 <g
                 key={pt.id}
-                onMouseDown={() => handleMouseDown(side, pt.id)}
+                onMouseDown={(e) => handleMouseDown(side, pt.id, e, { x: pctToPx(pt.x), y: mmToPx(pt.y) })}
                 className="cursor-move group"
                 >
                 <circle cx={pctToPx(pt.x)} cy={mmToPx(pt.y)} r="18" fill="transparent" />
@@ -315,7 +363,13 @@ export default function ShapeEditorCanvas() {
                     fill={sideColor}
                     stroke="white"
                     strokeWidth="3"
-                    className="transition-transform group-hover:scale-125"
+                    // A CSS transform on an SVG element defaults to
+                    // transform-box: view-box with transform-origin 0 0, so the hover
+                    // scale grew the circle about the SVG's origin instead of its own
+                    // centre - the dot jumped 54px right and 33px down the moment the
+                    // pointer touched it, while the hit target stayed put. fill-box
+                    // makes it scale about itself.
+                    className="transition-transform group-hover:scale-125 [transform-box:fill-box] [transform-origin:center]"
                 />
                 
                 {/* Tooltip-like label */}

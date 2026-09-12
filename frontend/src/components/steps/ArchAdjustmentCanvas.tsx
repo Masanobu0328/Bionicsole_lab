@@ -6,8 +6,16 @@ import { densifyClosedPolygon, densifyOpenCurve } from '@/lib/geometry-utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import { Info } from 'lucide-react';
 import MedialDetailHeightEditor from '@/components/steps/MedialDetailHeightEditor';
+import {
+    clinicalMedialHeights,
+    effectiveCurvesForSettings,
+    metatarsalFairingPoints,
+    pchipValue,
+    shapePreservingPoints,
+} from '@/lib/arch-geometry';
 
 // --- Cross Section Viewer Component ---
 
@@ -31,19 +39,29 @@ function CrossSectionViewer() {
     const {
         baseThickness,
         heelCupHeight,
+        bottomRounding,
         medialWallHeight, medialWallPeakX,
         lateralWallHeight, lateralWallPeakX,
         archSettingsRight, archSettingsLeft,
         activeFootSide,
         updateArchSettings,
         landmarkConfig,
-        archCurves,
+        archCurves: storedArchCurves,
         outlinePoints,
+        bottomOutlinePoints,
+        wallDishReach,
+        medialBandDropBias,
+        lateralBandDropBias,
+        wallFirstStageDeg,
     } = useStore();
 
     // Select settings based on active side
     const archSettings = activeFootSide === 'right' ? archSettingsRight : archSettingsLeft;
     const isRightFoot = activeFootSide === 'right';
+    const archCurves = useMemo(
+        () => effectiveCurvesForSettings(storedArchCurves, archSettings, outlinePoints, landmarkConfig),
+        [storedArchCurves, archSettings, outlinePoints, landmarkConfig],
+    );
 
     // アーチX軸位置（開始・ピーク・終了）は左右共通なので、マウント時に右足の値を左足に同期する
     const archSettingsRightRef = React.useRef(archSettingsRight);
@@ -90,15 +108,27 @@ function CrossSectionViewer() {
         // パラメータ変化なしならスキップ
         if (prev.height === currH && prev.start === currStart && prev.peak === currPeak && prev.end === currEnd) return;
 
-        // 各ランドマーク位置でのベルカーブ高さを再計算して詳細設定に反映
-        const sub    = landmarkConfig['subtalar'] ?? 30;
-        const nav    = landmarkConfig['navicular'] ?? 43;
-        const cun    = landmarkConfig['medial_cuneiform'] ?? 55;
-        const mb1Pct = (landmarkConfig['metatarsal'] ?? 70) + 1;
-        const m5Pct  = (cun + mb1Pct) / 2;
-        const newH = [sub, nav, cun, m5Pct].map(x =>
-            Math.round(bellCurveH(x, currStart, currPeak, currEnd, currH) * 10) / 10
-        );
+        const hasClinicalPattern =
+            (archSettings.subtalar_pattern && archSettings.subtalar_pattern !== 'custom')
+            || (archSettings.first_ray_pattern && archSettings.first_ray_pattern !== 'custom');
+        const newH = hasClinicalPattern
+            ? clinicalMedialHeights(
+                currH,
+                archSettings,
+                landmarkConfig,
+                archSettings.subtalar_pattern,
+                archSettings.first_ray_pattern,
+            )
+            : (() => {
+                const sub = landmarkConfig['subtalar'] ?? 30;
+                const nav = landmarkConfig['navicular'] ?? 43;
+                const cun = landmarkConfig['medial_cuneiform'] ?? 55;
+                const mb1Pct = (landmarkConfig['metatarsal'] ?? 70) + 1;
+                const m5Pct = (cun + mb1Pct) / 2;
+                return [sub, nav, cun, m5Pct].map(x =>
+                    Math.round(bellCurveH(x, currStart, currPeak, currEnd, currH) * 10) / 10
+                );
+            })();
         updateArchSettings(currSide, { medial_detail_heights: newH });
     }, [archSettings.medial_height, archSettings.medial_start, archSettings.medial_peak, archSettings.medial_end, activeFootSide]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -178,6 +208,30 @@ function CrossSectionViewer() {
         } else {
             updateArchSettings(activeFootSide, { transverse_detail_enabled: true });
         }
+    };
+
+    const applyClinicalPattern = (
+        axis: 'subtalar' | 'firstRay',
+        value: 'pronation' | 'supination' | 'plantarflexion' | 'dorsiflexion',
+    ) => {
+        const subtalar = axis === 'subtalar'
+            ? value as 'pronation' | 'supination'
+            : archSettings.subtalar_pattern;
+        const firstRay = axis === 'firstRay'
+            ? value as 'plantarflexion' | 'dorsiflexion'
+            : archSettings.first_ray_pattern;
+        updateArchSettings(activeFootSide, {
+            medial_detail_enabled: true,
+            subtalar_pattern: subtalar,
+            first_ray_pattern: firstRay,
+            medial_detail_heights: clinicalMedialHeights(
+                archSettings.medial_height,
+                archSettings,
+                landmarkConfig,
+                subtalar,
+                firstRay,
+            ),
+        });
     };
 
     const svgRef = React.useRef<SVGSVGElement>(null);
@@ -273,7 +327,7 @@ function CrossSectionViewer() {
             }
         };
 
-        // 横アーチ詳細スプライン評価（バックエンドと同じ制御点・Catmull-Rom近似）
+        // 横アーチ詳細スプライン評価（STLと同じPCHIP）
         const evaluateTransverseDetail = (x: number): number => {
             const heights = archSettings.transverse_detail_heights ?? [0, 0, 0, 0];
             const { transverse_start, transverse_end } = archSettings;
@@ -287,21 +341,11 @@ function CrossSectionViewer() {
             const xs = [transverse_start, nav, cun, mt, met, transverse_end];
             const ys = [0, heights[0], heights[1], heights[2], heights[3], 0];
             if (x <= transverse_start || x >= transverse_end) return 0;
-            let i = 0;
-            for (; i < xs.length - 2; i++) { if (x <= xs[i + 1]) break; }
-            const dx = xs[i + 1] - xs[i];
-            if (dx <= 0) return ys[i];
-            const t = (x - xs[i]) / dx;
-            const m1 = i > 0 ? ((ys[i+1] - ys[i-1]) / (xs[i+1] - xs[i-1])) * dx : 0;
-            const m2 = i < xs.length - 2 ? ((ys[i+2] - ys[i]) / (xs[i+2] - xs[i])) * dx : 0;
-            const h00 = 2*t*t*t - 3*t*t + 1;
-            const h10 = t*t*t - 2*t*t + t;
-            const h01 = -2*t*t*t + 3*t*t;
-            const h11 = t*t*t - t*t;
-            return Math.max(0, h00*ys[i] + h10*m1 + h01*ys[i+1] + h11*m2);
+            if (!xs.every((value, index) => index === 0 || value > xs[index - 1])) return 0;
+            return Math.max(0, pchipValue(xs, ys, x));
         };
 
-        // 詳細設定スプライン評価（バックエンド _build_detail_spline と同じ制御点・Catmull-Rom近似）
+        // 詳細設定スプライン評価（バックエンド _build_detail_spline と同じPCHIP）
         const evaluateDetailArch = (x: number): number => {
             const heights = archSettings.medial_detail_heights ?? [0, 0, 0, 0];
             const { medial_start, medial_end } = archSettings;
@@ -312,19 +356,8 @@ function CrossSectionViewer() {
             const xs = [medial_start, sub, nav, cun, m5, medial_end];
             const ys = [0, heights[0], heights[1], heights[2], heights[3], 0];
             if (x <= medial_start || x >= medial_end) return 0;
-            let i = 0;
-            for (; i < xs.length - 2; i++) { if (x <= xs[i + 1]) break; }
-            const dx = xs[i + 1] - xs[i];
-            if (dx <= 0) return ys[i];
-            const t = (x - xs[i]) / dx;
-            // Catmull-Rom 接線（両端クランプ = 0）
-            const m1 = i > 0 ? ((ys[i+1] - ys[i-1]) / (xs[i+1] - xs[i-1])) * dx : 0;
-            const m2 = i < xs.length - 2 ? ((ys[i+2] - ys[i]) / (xs[i+2] - xs[i])) * dx : 0;
-            const h00 = 2*t*t*t - 3*t*t + 1;
-            const h10 = t*t*t - 2*t*t + t;
-            const h01 = -2*t*t*t + 3*t*t;
-            const h11 = t*t*t - t*t;
-            return Math.max(0, h00*ys[i] + h10*m1 + h01*ys[i+1] + h11*m2);
+            if (!xs.every((value, index) => index === 0 || value > xs[index - 1])) return 0;
+            return Math.max(0, pchipValue(xs, ys, x));
         };
 
         // Get landmark positions
@@ -368,10 +401,18 @@ function CrossSectionViewer() {
         const currentX = minX + (maxX - minX) * (xPercent / 100);
 
         // Get Curve Intersections at current X
-        const medialSolidY = archCurves?.medial ? getYAtX(archCurves.medial, currentX) : null;
-        const medialFlatY = archCurves?.medialFlat ? getYAtX(archCurves.medialFlat, currentX) : null;
-        const lateralSolidY = archCurves?.lateral ? getYAtX(archCurves.lateral, currentX) : null;
-        const lateralFlatY = archCurves?.lateralFlat ? getYAtX(archCurves.lateralFlat, currentX) : null;
+        const medialSolidY = archCurves?.medial
+            ? getYAtX(shapePreservingPoints(archCurves.medial, true), currentX)
+            : null;
+        const medialFlatY = archCurves?.medialFlat
+            ? getYAtX(shapePreservingPoints(archCurves.medialFlat), currentX)
+            : null;
+        const lateralSolidY = archCurves?.lateral
+            ? getYAtX(shapePreservingPoints(archCurves.lateral), currentX)
+            : null;
+        const lateralFlatY = archCurves?.lateralFlat
+            ? getYAtX(shapePreservingPoints(archCurves.lateralFlat), currentX)
+            : null;
 
         // Densify transverse polygon for smooth computation (8 ctrl pts → 64 pts via Catmull-Rom)
         const transverseDense = archCurves?.transverse ? densifyClosedPolygon(archCurves.transverse) : null;
@@ -392,7 +433,10 @@ function CrossSectionViewer() {
             const padPoly: { x: number, y: number }[] = [];
             const smoothHeel = densifyOpenCurve(archCurves.heelBridge);
             const smoothLateral = densifyOpenCurve(archCurves.lateralBridge);
-            const smoothMeta = densifyOpenCurve(archCurves.metatarsalBridge);
+            const smoothMeta = metatarsalFairingPoints(
+                archCurves.transverse,
+                archCurves.metatarsalBridge,
+            );
             padPoly.push(...smoothHeel);
             const outerStartX = smoothHeel[smoothHeel.length - 1].x;
             const outerEndX = smoothLateral[0].x;
@@ -417,7 +461,8 @@ function CrossSectionViewer() {
             archPadYRange = getYRangeAtX(padPoly, currentX);
         }
 
-        // Mirror Y coordinate for left foot
+        // Saved data is the Bionicsol right-foot reference: MinY=medial, MaxY=lateral.
+        // Only the completed left-foot preview is mirrored, matching the final STL.
         const mirrorY = (y: number | null): number | null => {
             if (y === null) return null;
             if (!isRightFoot) {
@@ -426,40 +471,50 @@ function CrossSectionViewer() {
             return y;
         };
 
-        // Apply mirroring to curve Y values for left foot
+        // Apply the display-only final-foot mirror without mutating saved curve data.
         const medialSolidYMirrored = mirrorY(medialSolidY);
         const medialFlatYMirrored = mirrorY(medialFlatY);
         const lateralSolidYMirrored = mirrorY(lateralSolidY);
         const lateralFlatYMirrored = mirrorY(lateralFlatY);
 
-        // Mirror transverse ranges for left foot
         const transverseRangeMirrored = transverseRange && !isRightFoot
             ? { min: currentYMin + currentYMax - transverseRange.max, max: currentYMin + currentYMax - transverseRange.min }
             : transverseRange;
+        const archPadYRangeMirrored = archPadYRange && !isRightFoot
+            ? { min: currentYMin + currentYMax - archPadYRange.max, max: currentYMin + currentYMax - archPadYRange.min }
+            : archPadYRange;
         // Dynamic heel cup region (same as backend)
         for (let i = 0; i <= resolution; i++) {
             const yPct = (i / resolution) * 100;
             const yRatio = yPct / 100;
             const currentY = currentYMin + yRatio * currentWidth;
 
-            // arch_y_ratio: Backend uses this for left/right foot handling
-            // FIX: Right Foot Baseline (MinY=Medial)
-            // Right: yRatio=0 (MinY) -> archYRatio=1 (Inner)
-            // Left: yRatio=0 (MinY) -> archYRatio=0 (Outer, Lateral)
+            // Right final mesh is mirrored: MinY=medial. Left remains canonical: MaxY=medial.
             const archYRatio = isRightFoot ? (1.0 - yRatio) : yRatio;
 
             // Dynamic heel cup region based on Y position (same as backend)
             const heelCupRegion = lateralStart * (1 - archYRatio) + medialStart * archYRatio;
 
             // Calculate arch height based on Y position (NEW LOGIC)
-            let longitudinalArchHeight = 0;
+            let medialArchHeight = 0;
+            let lateralArchHeight = 0;
             let transverseArchHeight = 0;
 
-            // Edge Definition (Right Foot Priority)
-            // Right Foot: Medial Edge is MinY.
-            // Left Foot: Medial Edge is MaxY.
             const medialEdge = isRightFoot ? currentYMin : currentYMax;
             const lateralEdge = isRightFoot ? currentYMax : currentYMin;
+            // Mirrors _band_profile_height in geometry_v4_frontend.py. The bias moves
+            // where the band does its falling: 1.0 drops hardest at the solid boundary,
+            // higher values drop just inside the dashed one and land tangentially on
+            // the solid one. Medial and lateral carry their own value. Keep this in
+            // step with the engine.
+            const bandProfile = (t: number, maxHeight: number, dropBias: number) => {
+                if (t <= 0) return 0;
+                const drop = 0.15;
+                const bias = Math.min(Math.max(dropBias, 1), 4);
+                const biased = bias === 1 ? t : Math.pow(t, bias);
+                const capped = Math.min(biased, 6);
+                return maxHeight * (1 - Math.pow(drop, capped)) / (1 - Math.pow(drop, 6));
+            };
 
             // 1. Medial Arch
             if (medialSolidYMirrored !== null && medialFlatYMirrored !== null) {
@@ -467,14 +522,15 @@ function CrossSectionViewer() {
                 const flatMax = Math.max(medialFlatYMirrored, medialEdge);
 
                 if (currentY >= flatMin && currentY <= flatMax) {
-                    longitudinalArchHeight = Math.max(longitudinalArchHeight, archInner);
+                    const denom = medialFlatYMirrored - medialSolidYMirrored;
+                    medialArchHeight = Math.abs(denom) > 0.01
+                        ? bandProfile((currentY - medialSolidYMirrored) / denom, archInner, medialBandDropBias)
+                        : 0;
                 } else {
                     const denom = medialFlatYMirrored - medialSolidYMirrored;
                     if (Math.abs(denom) > 0.01) {
                         const t = (currentY - medialSolidYMirrored) / denom;
-                        if (t >= 0 && t <= 1) {
-                            longitudinalArchHeight = Math.max(longitudinalArchHeight, archInner * smoothstep(t));
-                        }
+                        medialArchHeight = bandProfile(t, archInner, medialBandDropBias);
                     }
                 }
             } else {
@@ -485,9 +541,9 @@ function CrossSectionViewer() {
                     const yRange = medialYEnd - medialYStart;
                     if (yRange > 0) {
                         const innerFactor = Math.min(1.0, (archYRatio - medialYStart) / yRange);
-                        longitudinalArchHeight = Math.max(longitudinalArchHeight, archInner * innerFactor);
+                        medialArchHeight = archInner * innerFactor;
                     } else {
-                        longitudinalArchHeight = Math.max(longitudinalArchHeight, archInner);
+                        medialArchHeight = archInner;
                     }
                 }
             }
@@ -498,14 +554,15 @@ function CrossSectionViewer() {
                 const flatMax = Math.max(lateralFlatYMirrored, lateralEdge);
 
                 if (currentY >= flatMin && currentY <= flatMax) {
-                    longitudinalArchHeight = Math.max(longitudinalArchHeight, archOuter);
+                    const denom = lateralFlatYMirrored - lateralSolidYMirrored;
+                    lateralArchHeight = Math.abs(denom) > 0.01
+                        ? bandProfile((currentY - lateralSolidYMirrored) / denom, archOuter, lateralBandDropBias)
+                        : 0;
                 } else {
                     const denom = lateralFlatYMirrored - lateralSolidYMirrored;
                     if (Math.abs(denom) > 0.01) {
                         const t = (currentY - lateralSolidYMirrored) / denom;
-                        if (t >= 0 && t <= 1) {
-                            longitudinalArchHeight = Math.max(longitudinalArchHeight, archOuter * smoothstep(t));
-                        }
+                        lateralArchHeight = bandProfile(t, archOuter, lateralBandDropBias);
                     }
                 }
             } else {
@@ -516,9 +573,9 @@ function CrossSectionViewer() {
                     const yRange = lateralYEnd - lateralYStart;
                     if (yRange > 0) {
                         const outerFactor = Math.max(0, 1.0 - ((archYRatio - lateralYStart) / yRange));
-                        longitudinalArchHeight = Math.max(longitudinalArchHeight, archOuter * outerFactor);
+                        lateralArchHeight = archOuter * outerFactor;
                     } else {
-                        longitudinalArchHeight = Math.max(longitudinalArchHeight, archOuter);
+                        lateralArchHeight = archOuter;
                     }
                 }
             }
@@ -530,9 +587,8 @@ function CrossSectionViewer() {
                     const center = (transverseRangeMirrored.min + transverseRangeMirrored.max) / 2;
                     const half = (transverseRangeMirrored.max - transverseRangeMirrored.min) / 2;
                     if (half > 0) {
-                        const f = Math.pow(Math.max(0, 1.0 - Math.abs(currentY - center) / half), 0.6);
-                        // Y方向プラトー拡大 + ダブルスムースステップ
-                        transverseArchHeight = archTransverse * smoothstep(smoothstep(f));
+                        const f = Math.max(0, 1.0 - Math.abs(currentY - center) / half);
+                        transverseArchHeight = archTransverse * smoothstep(f);
                     }
                 }
             } else {
@@ -544,25 +600,25 @@ function CrossSectionViewer() {
                     const halfRange = (transverseYEnd - transverseYStart) / 2;
                     if (halfRange > 0) {
                         const centerDist = Math.abs(archYRatio - center);
-                        let transverseFactor = Math.pow(Math.max(0, 1.0 - (centerDist / halfRange)), 0.6);
-                        // Y方向プラトー拡大 + ダブルスムースステップ
-                        transverseFactor = smoothstep(smoothstep(transverseFactor));
+                        const transverseFactor = smoothstep(Math.max(0, 1.0 - (centerDist / halfRange)));
                         transverseArchHeight = archTransverse * transverseFactor;
                     }
                 }
             }
 
-            let archH = Math.max(longitudinalArchHeight, transverseArchHeight);
+            const smoothUnion = (a: number, b: number) => Math.pow(Math.pow(Math.max(0, a), 6) + Math.pow(Math.max(0, b), 6), 1 / 6);
+            const longitudinalArchHeight = smoothUnion(medialArchHeight, lateralArchHeight);
+            let archH = smoothUnion(longitudinalArchHeight, transverseArchHeight);
 
             // Micro-height floor for arch pad area (prevents dip to 0mm between arches)
-            if (archPadYRange && currentY >= archPadYRange.min && currentY <= archPadYRange.max) {
+            if (archPadYRangeMirrored && currentY >= archPadYRangeMirrored.min && currentY <= archPadYRangeMirrored.max) {
                 const microHeightX = Math.max(archInner, archOuter, archTransverse);
                 if (microHeightX > 0) {
                     const maxArchH = Math.max(archSettings.medial_height, archSettings.lateral_height, 0.01);
                     const normalized = Math.min(1.0, microHeightX / maxArchH);
                     let microH = 0.4 * normalized;
 
-                    const distToEdge = Math.min(currentY - archPadYRange.min, archPadYRange.max - currentY);
+                    const distToEdge = Math.min(currentY - archPadYRangeMirrored.min, archPadYRangeMirrored.max - currentY);
                     const falloffDist = 3.0;
                     if (distToEdge > 0 && distToEdge < falloffDist) {
                         microH *= smoothstep(distToEdge / falloffDist);
@@ -578,7 +634,12 @@ function CrossSectionViewer() {
             let wallH = outerWallH * (1 - archYRatio) + innerWallH * archYRatio;
 
             // Y-direction transition distance (バックエンドと同期: 10mm)
-            const transitionDistance = 10.0;
+            // Reach and power are coupled so the entry angle at the rim stays
+            // fixed while the tail lengthens. The falloff runs over
+            // (reach - offset), so the exponent scales with that, not reach.
+            const WALL_DISH_REACH_MM = wallDishReach;
+            const WALL_FALLOFF_POWER = (2.0 / 9.5) * (WALL_DISH_REACH_MM - 0.5);
+            const transitionDistance = WALL_DISH_REACH_MM;
             const transitionOffset = 0.5;
 
             // Distance from edges in mm
@@ -592,18 +653,18 @@ function CrossSectionViewer() {
                 yBlend = 0.0;
             } else if (distFromEdge < transitionDistance) {
                 const rawT = Math.min(1, Math.max(0, (distFromEdge - transitionOffset) / (transitionDistance - transitionOffset)));
-                yBlend = smoothstep(rawT);
+                yBlend = 1 - Math.pow(1 - rawT, WALL_FALLOFF_POWER);
             }
 
             // X-blend calculation (heel cup region)
             let xBlend = 1.0;
-            const xTransition = 10.0;
+            const xTransition = WALL_DISH_REACH_MM;
             if (xPercent <= heelCupRegion && distHeel < xTransition) {
                 if (distHeel < transitionOffset) {
                     xBlend = 0.0;
                 } else {
                     const rawT = Math.min(1, Math.max(0, (distHeel - transitionOffset) / (xTransition - transitionOffset)));
-                    xBlend = smoothstep(rawT);
+                    xBlend = 1 - Math.pow(1 - rawT, WALL_FALLOFF_POWER);
                 }
             }
 
@@ -616,16 +677,194 @@ function CrossSectionViewer() {
                 wallH += heelCupProfile * xFactor;
             }
 
-            const blendedHeight = wallH * (1 - blend) + archH * blend;
+            // p-norm smooth max, matching the engine: the wall term fades with
+            // blend but the arch is no longer crossfaded away against it.
+            const wallTerm = Math.max(0, wallH * (1 - blend));
+            const blendedHeight = Math.pow(
+                Math.pow(wallTerm, 6) + Math.pow(Math.max(0, archH), 6), 1 / 6);
             let totalH = baseThickness + blendedHeight;
             if (totalH < baseThickness) totalH = baseThickness;
 
             points.push({ yPct, h: totalH });
         }
         return points;
-    }, [xPercent, baseThickness, heelCupHeight, medialWallHeight, medialWallPeakX, lateralWallHeight, lateralWallPeakX, archSettings, landmarkConfig, isRightFoot, archCurves, outlinePoints]);
+    }, [xPercent, baseThickness, heelCupHeight, medialWallHeight, medialWallPeakX, lateralWallHeight, lateralWallPeakX, archSettings, landmarkConfig, isRightFoot, archCurves, outlinePoints, wallDishReach, medialBandDropBias, lateralBandDropBias, wallFirstStageDeg]);
 
-    const pathD = `M ${pctToPx(0)} ${mmToPx(profileData[0].h)} ` + profileData.map(p => `L ${pctToPx(p.yPct)} ${mmToPx(p.h)}`).join(' ');
+    // --- Underside of the section --------------------------------------
+    // Mirrors core/geometry_v4_frontend.py: the bottom outline is pulled inside
+    // the top one for shoe clearance, the side wall takes a two-stage path
+    // wherever that offset is wide, and the bottom corner carries a fillet that
+    // fades out over the same offset (there is no 90 degree corner to round on
+    // a shallow ramp).
+    const ss = (t: number) => { const c = Math.max(0, Math.min(1, t)); return c * c * (3 - 2 * c); };
+    const ROUND_WALL_FULL_MM = 1.5;
+    const ROUND_MAX_FRACTION = 0.7;
+    const WALL_POWER_MIN = 3.0;
+    const WALL_POWER_MAX = 14.0;
+    const WALL_RAMP_MIX_MAX = 0.7;
+const WALL_STAGE_BLEND_POWER = 6;
+// Most of the climb the straight first stage may claim, so a steep setting cannot
+// swallow the second stage and leave a flat shelf. Mirrors the engine.
+const WALL_FIRST_STAGE_MAX_SHARE = 0.8;
+const WALL_STRAIGHT_BLEND_MM = 12.0;
+
+    const edgeRadiusMm = (h: number, offsetMm: number) => {
+        if (bottomRounding <= 0) return 0;
+        const wall = Math.max(0, h - baseThickness);
+        return Math.min(bottomRounding * ss(wall / ROUND_WALL_FULL_MM), h * ROUND_MAX_FRACTION);
+    };
+    // The arc turns through the LOCAL wall angle, so a shallow clearance ramp
+    // gets a small break instead of a quarter circle standing the rim up.
+    const wallStartAngle = (offsetMm: number, rimZ: number) => {
+        const rise = Math.max(0, rimZ);
+        const firstSlope = Math.min(
+            Math.tan((Math.max(0, wallFirstStageDeg) * Math.PI) / 180),
+            (WALL_FIRST_STAGE_MAX_SHARE * rise) / Math.max(offsetMm, 1e-9),
+        );
+        return Math.max(
+            Math.atan2(rise * (1 - rampMix(offsetMm)), Math.max(offsetMm, 1e-9)),
+            Math.atan(firstSlope),
+        );
+    };
+
+    // Mirrors _wall_z in core/geometry_v4_frontend.py. Two stages combined with a
+    // smooth maximum: a straight climb out of the floor at wallFirstStageDeg, and
+    // the eased curve that lands on the top rim. A single curve cannot be steep at
+    // the bottom - the rise is fixed and the run is whatever the clearance gives -
+    // so where the clearance opens the eased curve alone fell to about 5 degrees.
+    // Keep this in step with the engine.
+    const rampMix = (offsetMm: number) =>
+        WALL_RAMP_MIX_MAX * ss(offsetMm / WALL_STRAIGHT_BLEND_MM);
+    const wallZ = (
+        q: number, baseZ: number, rimZ: number, power: number, mix: number,
+        offsetMm: number,
+    ) => {
+        const rise = Math.max(0, rimZ - baseZ);
+        const qq = Math.max(0, q);
+        const eased = rise * ((1 - mix) * qq + mix * Math.pow(qq, power));
+        const deg = Math.max(0, wallFirstStageDeg);
+        if (deg <= 0) return baseZ + eased;
+        const slope = Math.min(
+            Math.tan((deg * Math.PI) / 180),
+            (WALL_FIRST_STAGE_MAX_SHARE * rise) / Math.max(offsetMm, 1e-9),
+        );
+        const first = Math.min(rise, slope * offsetMm * qq);
+        const n = WALL_STAGE_BLEND_POWER;
+        const blended = Math.pow(
+            Math.pow(Math.max(0, first), n) + Math.pow(Math.max(0, eased), n), 1 / n);
+        return baseZ + Math.min(rise, blended);
+    };
+
+    const outlineXs = outlinePoints.length > 0 ? outlinePoints.map(pt => pt.x) : [0, 260];
+    const sectionX = Math.min(...outlineXs)
+        + (Math.max(...outlineXs) - Math.min(...outlineXs)) * (xPercent / 100);
+    const sectionBounds = getOutlineBoundsAtX(sectionX);
+    const sectionWidthMm = sectionBounds ? (sectionBounds.max - sectionBounds.min) : 80;
+    const mmToPct = (mm: number) => (sectionWidthMm > 0 ? (mm / sectionWidthMm) * 100 : 0);
+
+    // Bottom outline position at this X, expressed in the view's 0..100 scale.
+    const bottomBounds = bottomOutlinePoints.length > 2
+        ? getYRangeAtX(bottomOutlinePoints, sectionX) : null;
+    const toViewPct = (y: number) => {
+        if (!sectionBounds || sectionWidthMm <= 0) return 0;
+        const pct = ((y - sectionBounds.min) / sectionWidthMm) * 100;
+        return isRightFoot ? pct : 100 - pct;
+    };
+    let bottomLeftPct = 0;
+    let bottomRightPct = 100;
+    if (bottomBounds && sectionBounds) {
+        const a = toViewPct(bottomBounds.min);
+        const b = toViewPct(bottomBounds.max);
+        bottomLeftPct = Math.max(0, Math.min(a, b));
+        bottomRightPct = Math.min(100, Math.max(a, b));
+    }
+    const offsetLeftMm = (bottomLeftPct / 100) * sectionWidthMm;
+    const offsetRightMm = ((100 - bottomRightPct) / 100) * sectionWidthMm;
+
+    const hLeft = profileData[0].h;
+    const hRight = profileData[profileData.length - 1].h;
+    const rLeftMm = edgeRadiusMm(hLeft, offsetLeftMm);
+    const rRightMm = edgeRadiusMm(hRight, offsetRightMm);
+
+    // Top surface height at a given view pct, for the clearance clamp below.
+    const topAtPct = (pct: number) => {
+        const t = Math.max(0, Math.min(1, pct / 100)) * (profileData.length - 1);
+        const i = Math.min(profileData.length - 2, Math.floor(t));
+        const f = t - i;
+        return profileData[i].h * (1 - f) + profileData[i + 1].h * f;
+    };
+    // Mirrors MIN_WALL_CLEARANCE_MM / WALL_CLEARANCE_RAMP_MM: the wall is kept
+    // clear of the top surface, ramped in from the rim so the edge tapers
+    // instead of ending in a clearance-tall vertical lip.
+    const MIN_WALL_CLEARANCE_MM = 2.0;
+    const WALL_CLEARANCE_RAMP_MM = 1.5;
+
+    // Exponent that keeps the wall under the top surface, mirroring
+    // _wall_power_from_ceiling: q**p <= (ceiling - base)/(rim - base).
+    const WALL_STEPS = 14;
+    const wallPower = (fromPct: number, toPct: number, offsetMm: number,
+                       baseZ: number, rimZ: number) => {
+        const rise = Math.max(1e-6, rimZ - baseZ);
+        let p = WALL_POWER_MIN;
+        for (let k = 1; k < WALL_STEPS; k++) {
+            const q = k / WALL_STEPS;
+            const pct = fromPct + (toPct - fromPct) * q;
+            const depth = (1 - q) * offsetMm;
+            const clearance = MIN_WALL_CLEARANCE_MM * ss(depth / WALL_CLEARANCE_RAMP_MM);
+            const ratio = Math.min(1, Math.max(1e-6, (topAtPct(pct) - clearance - baseZ) / rise));
+            const mix = rampMix(offsetMm);
+            const headroom = ratio - (1 - mix) * q;
+            p = Math.max(p, headroom > 0
+                ? Math.log(Math.min(1, Math.max(1e-6, headroom / Math.max(mix, 1e-6)))) / Math.log(q)
+                : WALL_POWER_MAX);
+        }
+        return Math.min(WALL_POWER_MAX, p);
+    };
+
+    const wallPoints = (fromPct: number, toPct: number, offsetMm: number,
+                        baseZ: number, rimZ: number) => {
+        const power = wallPower(fromPct, toPct, offsetMm, baseZ, rimZ);
+        const out: { pct: number; z: number }[] = [];
+        for (let k = 1; k <= WALL_STEPS; k++) {
+            const q = k / WALL_STEPS;
+            out.push({
+                pct: fromPct + (toPct - fromPct) * q,
+                z: wallZ(q, baseZ, rimZ, power, rampMix(offsetMm), offsetMm),
+            });
+        }
+        return out;
+    };
+
+    const aLeft = wallStartAngle(offsetLeftMm, hLeft);
+    const aRight = wallStartAngle(offsetRightMm, hRight);
+    // Horizontal reach of the arc and how far it lifts the rim.
+    const runLeftMm = rLeftMm * Math.sin(aLeft);
+    const runRightMm = rRightMm * Math.sin(aRight);
+    const liftLeftMm = rLeftMm * (1 - Math.cos(aLeft));
+    const liftRightMm = rRightMm * (1 - Math.cos(aRight));
+    const rLeftPct = mmToPct(runLeftMm);
+    const rRightPct = mmToPct(runRightMm);
+    const arcRx = (pct: number) => Math.abs(pctToPx(pct) - pctToPx(0));
+    const arcRy = (mm: number) => Math.abs(mmToPx(0) - mmToPx(mm));
+
+    const lineTo = (pts: { pct: number; z: number }[]) =>
+        pts.map(q => `L ${pctToPx(q.pct)} ${mmToPx(q.z)}`).join(' ');
+
+    // Left fillet, left wall up, top surface, right wall down, right fillet.
+    const pathD =
+        `M ${pctToPx(bottomLeftPct + rLeftPct)} ${mmToPx(0)} ` +
+        (runLeftMm > 0.01
+            ? `A ${arcRx(mmToPct(rLeftMm))} ${arcRy(rLeftMm)} 0 0 1 ${pctToPx(bottomLeftPct)} ${mmToPx(liftLeftMm)} `
+            : `L ${pctToPx(bottomLeftPct)} ${mmToPx(0)} `) +
+        lineTo(wallPoints(bottomLeftPct, 0, offsetLeftMm, liftLeftMm, hLeft)) + ' ' +
+        profileData.map(p => `L ${pctToPx(p.yPct)} ${mmToPx(p.h)}`).join(' ') + ' ' +
+        lineTo(
+            wallPoints(bottomRightPct, 100, offsetRightMm, liftRightMm, hRight)
+                .slice(0, -1).reverse()
+        ) + ' ' +
+        (runRightMm > 0.01
+            ? `L ${pctToPx(bottomRightPct)} ${mmToPx(liftRightMm)} A ${arcRx(mmToPct(rRightMm))} ${arcRy(rRightMm)} 0 0 1 ${pctToPx(bottomRightPct - rRightPct)} ${mmToPx(0)}`
+            : `L ${pctToPx(bottomRightPct)} ${mmToPx(0)}`);
 
     // Width-wise boundaries
     const yBoundaries = [
@@ -724,11 +963,54 @@ function CrossSectionViewer() {
                                 </g>
                             );
                         })}
-                        <path d={`${pathD} L ${pctToPx(100)} ${mmToPx(0)} L ${pctToPx(0)} ${mmToPx(0)} Z`} fill="hsl(var(--primary))" fillOpacity="0.1" />
+                        <path d={`${pathD} L ${pctToPx(bottomLeftPct + rLeftPct)} ${mmToPx(0)} Z`} fill="hsl(var(--primary))" fillOpacity="0.1" />
                         <path d={pathD} fill="none" stroke="hsl(var(--primary))" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                         <text x={PADDING} y={VIEW_HEIGHT - 10} className="text-[9px] font-bold fill-muted-foreground uppercase tracking-wider">{isRightFoot ? 'Medial' : 'Lateral'}</text>
                         <text x={VIEW_WIDTH - PADDING} y={VIEW_HEIGHT - 10} textAnchor="end" className="text-[9px] font-bold fill-muted-foreground uppercase tracking-wider">{isRightFoot ? 'Lateral' : 'Medial'}</text>
                     </svg>
+                </div>
+            </CardContent>
+        </Card>
+
+        <Card className="mt-4 border-border/50 shadow-none">
+            <CardHeader className="pb-3">
+                <CardTitle className="text-sm">内側縦アーチ 臨床パターン</CardTitle>
+                <CardDescription>選択中の内側アーチ高に比例して、ランドマーク別の高さを自動設定します。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <div>
+                    <Label className="text-xs text-muted-foreground">距骨下関節</Label>
+                    <div className="mt-1 flex gap-2">
+                        {(['pronation', 'supination'] as const).map((pattern) => (
+                            <Button
+                                key={pattern}
+                                type="button"
+                                size="sm"
+                                variant={archSettings.subtalar_pattern === pattern ? 'default' : 'outline'}
+                                onClick={() => applyClinicalPattern('subtalar', pattern)}
+                            >
+                                {pattern === 'pronation' ? '回内' : '回外'}
+                            </Button>
+                        ))}
+                        {archSettings.subtalar_pattern === 'custom' && <span className="self-center text-xs text-muted-foreground">カスタム</span>}
+                    </div>
+                </div>
+                <div>
+                    <Label className="text-xs text-muted-foreground">第1列</Label>
+                    <div className="mt-1 flex gap-2">
+                        {(['plantarflexion', 'dorsiflexion'] as const).map((pattern) => (
+                            <Button
+                                key={pattern}
+                                type="button"
+                                size="sm"
+                                variant={archSettings.first_ray_pattern === pattern ? 'default' : 'outline'}
+                                onClick={() => applyClinicalPattern('firstRay', pattern)}
+                            >
+                                {pattern === 'plantarflexion' ? '底屈' : '背屈'}
+                            </Button>
+                        ))}
+                        {archSettings.first_ray_pattern === 'custom' && <span className="self-center text-xs text-muted-foreground">カスタム</span>}
+                    </div>
                 </div>
             </CardContent>
         </Card>
@@ -757,7 +1039,11 @@ function CrossSectionViewer() {
                                 startPct={archSettings.medial_start}
                                 endPct={archSettings.medial_end}
                                 maxH={Math.max(10, archSettings.medial_height + 2)}
-                                onChange={(h) => updateArchSettings(activeFootSide, { medial_detail_heights: h })}
+                                onChange={(h) => updateArchSettings(activeFootSide, {
+                                    medial_detail_heights: h,
+                                    subtalar_pattern: 'custom',
+                                    first_ray_pattern: 'custom',
+                                })}
                             />
                         </CardContent>
                     </Card>

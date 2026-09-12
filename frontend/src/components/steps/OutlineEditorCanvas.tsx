@@ -99,7 +99,15 @@ export default function OutlineEditorCanvas() {
             const img = new Image();
             img.onload = () => {
                 setOutlineImageSize({ width: img.naturalWidth / 5, height: img.naturalHeight / 5 });
-                setIsImageEditMode(true);
+                // Only open image positioning when there is no outline to work on yet -
+                // that is a photo that has just been brought in. This effect also runs on
+                // every mount, so leaving for another step and coming back used to drop
+                // the user into image editing on top of an outline they wanted to edit.
+                // Read the store at callback time: this fires asynchronously and the
+                // effect deliberately depends on the image alone.
+                if (useStore.getState().outlinePoints.length < 3) {
+                    setIsImageEditMode(true);
+                }
             };
             img.src = outlineImage;
         }
@@ -172,7 +180,8 @@ export default function OutlineEditorCanvas() {
         try {
             const transformedImage = await renderTransformedImageBlob(outlineImage, outlineImageTransform);
             const result = await extractOutlineFromImage(transformedImage, outlineTargetLengthMm, 120);
-            setOutlinePoints(result.outline_points);
+            // Default to coarse (~30 points) for easier editing
+            setOutlinePoints(simplifyToCount(result.outline_points, 30));
             setBottomOutlinePoints([]);
             setUseBottomOutline(false);
             setActiveTab('top');
@@ -213,19 +222,7 @@ export default function OutlineEditorCanvas() {
             } else if (draggingIndex !== null && !isImageEditMode && !isReadOnly) {
                 const pos = getLogicalPos(e);
                 const currentPoints = isBottomTab ? [...bottomOutlinePoints] : [...outlinePoints];
-                const dx = pos.x - currentPoints[draggingIndex].x;
-                const dy = pos.y - currentPoints[draggingIndex].y;
                 currentPoints[draggingIndex] = pos;
-                const neighbors = [
-                    { offset: 1, factor: 0.35 },
-                    { offset: 2, factor: 0.12 },
-                ];
-                for (const { offset, factor } of neighbors) {
-                    const prevIdx = (draggingIndex - offset + currentPoints.length) % currentPoints.length;
-                    const nextIdx = (draggingIndex + offset) % currentPoints.length;
-                    currentPoints[prevIdx] = { x: currentPoints[prevIdx].x + dx * factor, y: currentPoints[prevIdx].y + dy * factor };
-                    currentPoints[nextIdx] = { x: currentPoints[nextIdx].x + dx * factor, y: currentPoints[nextIdx].y + dy * factor };
-                }
                 if (isBottomTab) {
                     setBottomOutlinePoints(currentPoints);
                 } else {

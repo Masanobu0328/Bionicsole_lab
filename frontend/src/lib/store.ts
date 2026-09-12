@@ -11,6 +11,7 @@ import {
     saveOutlineToDB,
 } from './api';
 import { DEFAULT_ARCH_GRID } from '@/lib/constants';
+import { migrateArchCurves } from '@/lib/arch-geometry';
 
 type State = {
     patients: Patient[];
@@ -20,6 +21,11 @@ type State = {
     baseThickness: number;
     wallHeightOffset: number;
     heelCupHeight: number;
+    bottomRounding: number;
+    wallDishReach: number;
+    medialBandDropBias: number;
+    lateralBandDropBias: number;
+    wallFirstStageDeg: number;
     medialWallHeight: number;
     medialWallPeakX: number;
     lateralWallHeight: number;
@@ -80,6 +86,11 @@ type State = {
     setBaseThickness: (val: number) => void;
     setWallHeightOffset: (val: number) => void;
     setHeelCupHeight: (val: number) => void;
+    setBottomRounding: (val: number) => void;
+    setWallDishReach: (val: number) => void;
+    setMedialBandDropBias: (val: number) => void;
+    setLateralBandDropBias: (val: number) => void;
+    setWallFirstStageDeg: (val: number) => void;
     setMedialWallHeight: (val: number) => void;
     setMedialWallPeakX: (val: number) => void;
     setLateralWallHeight: (val: number) => void;
@@ -106,13 +117,18 @@ type State = {
 };
 
 type PatientPreset = {
-    version: 1;
+    version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
     updatedAt: string;
     params: {
         flipOrientation: boolean;
         baseThickness: number;
         wallHeightOffset: number;
         heelCupHeight: number;
+        bottomRounding: number;
+        wallDishReach: number;
+        medialBandDropBias: number;
+    lateralBandDropBias: number;
+    wallFirstStageDeg: number;
         medialWallHeight: number;
         medialWallPeakX: number;
         lateralWallHeight: number;
@@ -177,6 +193,29 @@ Object.values(DEFAULT_ARCH_GRID).forEach((cell) => {
     INITIAL_GRID_HEIGHTS[cell.id] = cell.default_height;
 });
 
+const DEFAULT_LANDMARK_CONFIG: Record<string, number> = {
+    arch_start: 15.0,
+    lateral_arch_start: 20.0,
+    subtalar: 30.0,
+    navicular: 43.0,
+    cuboid: 45.0,
+    medial_cuneiform: 55.0,
+    metatarsal: 70.0,
+};
+
+// Some legacy/corrupted rows store landmark_config in a foreign shape (e.g. the
+// old cm-based { medial: { start_cm, peak_cm, end_cm }, ... } preset format).
+// Drop any non-numeric entries so a stale value never reaches the backend,
+// which requires landmark_config to be Dict[str, float] and 422s otherwise.
+function sanitizeLandmarkConfig(raw: unknown): Record<string, number> {
+    const numericEntries = raw && typeof raw === 'object'
+        ? Object.entries(raw as Record<string, unknown>).filter(
+            (entry): entry is [string, number] => typeof entry[1] === 'number',
+        )
+        : [];
+    return { ...DEFAULT_LANDMARK_CONFIG, ...Object.fromEntries(numericEntries) };
+}
+
 export const STEPS = {
     PATIENT: 0,
     OUTLINE: 1,
@@ -189,13 +228,18 @@ export const STEPS = {
 
 function buildPatientPreset(state: State): PatientPreset {
     return {
-        version: 1,
+        version: 9,
         updatedAt: new Date().toISOString(),
         params: {
             flipOrientation: state.flipOrientation,
             baseThickness: state.baseThickness,
             wallHeightOffset: state.wallHeightOffset,
             heelCupHeight: state.heelCupHeight,
+            bottomRounding: state.bottomRounding,
+            wallDishReach: state.wallDishReach,
+            medialBandDropBias: state.medialBandDropBias,
+            lateralBandDropBias: state.lateralBandDropBias,
+            wallFirstStageDeg: state.wallFirstStageDeg,
             medialWallHeight: state.medialWallHeight,
             medialWallPeakX: state.medialWallPeakX,
             lateralWallHeight: state.lateralWallHeight,
@@ -247,6 +291,11 @@ function applyPresetParams(set: (partial: Partial<State>) => void, params: Patie
         baseThickness: params.baseThickness,
         wallHeightOffset: params.wallHeightOffset,
         heelCupHeight: params.heelCupHeight,
+        bottomRounding: params.bottomRounding ?? 4.0,
+        wallDishReach: params.wallDishReach ?? 10.0,
+        medialBandDropBias: params.medialBandDropBias ?? 2.0,
+        lateralBandDropBias: params.lateralBandDropBias ?? 1.0,
+        wallFirstStageDeg: params.wallFirstStageDeg ?? 15.0,
         medialWallHeight: params.medialWallHeight,
         medialWallPeakX: params.medialWallPeakX,
         lateralWallHeight: params.lateralWallHeight,
@@ -275,6 +324,11 @@ function buildDesignPayload(state: State, archSettings: ArchSettings) {
         base_thickness: state.baseThickness,
         wall_height_offset: state.wallHeightOffset,
         heel_cup_height: state.heelCupHeight,
+        bottom_rounding_mm: state.bottomRounding,
+        wall_dish_reach_mm: state.wallDishReach,
+        medial_band_drop_bias: state.medialBandDropBias,
+        lateral_band_drop_bias: state.lateralBandDropBias,
+        wall_first_stage_deg: state.wallFirstStageDeg,
         medial_wall_height: state.medialWallHeight,
         medial_wall_peak_x: state.medialWallPeakX,
         lateral_wall_height: state.lateralWallHeight,
@@ -309,6 +363,21 @@ function applyDesignToState(target: Partial<State>, design: DesignRecord | null)
     if (design.heel_cup_height !== undefined && design.heel_cup_height !== null) {
         target.heelCupHeight = design.heel_cup_height;
     }
+    if (design.bottom_rounding_mm !== undefined && design.bottom_rounding_mm !== null) {
+        target.bottomRounding = design.bottom_rounding_mm;
+    }
+    if (design.wall_dish_reach_mm !== undefined && design.wall_dish_reach_mm !== null) {
+        target.wallDishReach = design.wall_dish_reach_mm;
+    }
+    if (design.medial_band_drop_bias !== undefined && design.medial_band_drop_bias !== null) {
+        target.medialBandDropBias = design.medial_band_drop_bias;
+    }
+    if (design.lateral_band_drop_bias !== undefined && design.lateral_band_drop_bias !== null) {
+        target.lateralBandDropBias = design.lateral_band_drop_bias;
+    }
+    if (design.wall_first_stage_deg !== undefined && design.wall_first_stage_deg !== null) {
+        target.wallFirstStageDeg = design.wall_first_stage_deg;
+    }
     if (design.medial_wall_height !== undefined && design.medial_wall_height !== null) {
         target.medialWallHeight = design.medial_wall_height;
     }
@@ -334,7 +403,7 @@ function applyDesignToState(target: Partial<State>, design: DesignRecord | null)
         target.strutRadius = design.strut_radius;
     }
     if (design.landmark_config) {
-        target.landmarkConfig = design.landmark_config;
+        target.landmarkConfig = sanitizeLandmarkConfig(design.landmark_config);
     }
     if (design.width_config) {
         target.widthConfig = design.width_config;
@@ -343,10 +412,15 @@ function applyDesignToState(target: Partial<State>, design: DesignRecord | null)
         target.archCurves = design.arch_curves;
     }
     if (design.arch_settings) {
+        // Merge with defaults instead of replacing outright: some legacy/corrupted
+        // rows store a foreign shape here (e.g. bone-landmark offsets), and a raw
+        // replace would leave required fields like medial_height undefined,
+        // crashing Step 6 (Sidebar's ARCH_HEIGHT case calls .toFixed() on them).
+        const merged = { ...DEFAULT_ARCH_SETTINGS, ...design.arch_settings };
         if (design.foot_side === 'left') {
-            target.archSettingsLeft = design.arch_settings;
+            target.archSettingsLeft = merged;
         } else {
-            target.archSettingsRight = design.arch_settings;
+            target.archSettingsRight = merged;
         }
     }
 }
@@ -372,6 +446,11 @@ export const useStore = create<State>((set, get) => ({
     baseThickness: 3.0,
     wallHeightOffset: 0.0,
     heelCupHeight: 3.0,
+    bottomRounding: 4.0,
+    wallDishReach: 10.0,
+    medialBandDropBias: 2.0,
+    lateralBandDropBias: 1.0,
+    wallFirstStageDeg: 15.0,
     medialWallHeight: 6.0,
     medialWallPeakX: 43.0,
     lateralWallHeight: 3.0,
@@ -401,15 +480,7 @@ export const useStore = create<State>((set, get) => ({
     outlineTargetLengthMm: 260,
     bottomOutlinePoints: [],
     useBottomOutline: true,
-    landmarkConfig: {
-        arch_start: 15.0,
-        lateral_arch_start: 20.0,
-        subtalar: 30.0,
-        navicular: 43.0,
-        cuboid: 45.0,
-        medial_cuneiform: 55.0,
-        metatarsal: 70.0,
-    },
+    landmarkConfig: { ...DEFAULT_LANDMARK_CONFIG },
     widthConfig: {
         ray5_boundary: 25.0,
         ray1_boundary: 65.0,
@@ -505,6 +576,11 @@ export const useStore = create<State>((set, get) => ({
     setBaseThickness: (baseThickness) => set({ baseThickness }),
     setWallHeightOffset: (wallHeightOffset) => set({ wallHeightOffset }),
     setHeelCupHeight: (heelCupHeight) => set({ heelCupHeight }),
+    setBottomRounding: (bottomRounding) => set({ bottomRounding }),
+    setWallDishReach: (wallDishReach) => set({ wallDishReach }),
+    setMedialBandDropBias: (medialBandDropBias) => set({ medialBandDropBias }),
+    setLateralBandDropBias: (lateralBandDropBias) => set({ lateralBandDropBias }),
+    setWallFirstStageDeg: (wallFirstStageDeg) => set({ wallFirstStageDeg }),
     setMedialWallHeight: (medialWallHeight) => set({ medialWallHeight }),
     setMedialWallPeakX: (medialWallPeakX) => set({ medialWallPeakX }),
     setLateralWallHeight: (lateralWallHeight) => set({ lateralWallHeight }),
@@ -585,13 +661,21 @@ export const useStore = create<State>((set, get) => ({
                 applyDesignToState(nextState, baseDesign);
 
                 if (rightDesign?.arch_settings) {
-                    nextState.archSettingsRight = rightDesign.arch_settings;
+                    nextState.archSettingsRight = { ...DEFAULT_ARCH_SETTINGS, ...rightDesign.arch_settings };
                 }
                 if (leftDesign?.arch_settings) {
-                    nextState.archSettingsLeft = leftDesign.arch_settings;
+                    nextState.archSettingsLeft = { ...DEFAULT_ARCH_SETTINGS, ...leftDesign.arch_settings };
                 }
 
                 applyOutlineToState(nextState, outline);
+
+                const migration = migrateArchCurves(
+                    nextState.archCurves ?? null,
+                    nextState.outlinePoints ?? [],
+                );
+                if (migration.changed) {
+                    nextState.archCurves = migration.curves;
+                }
 
                 // Supabase doesn't store image data — restore it from localStorage
                 const localPreset = readPresetFromLocalStorage(patientId);
@@ -602,6 +686,18 @@ export const useStore = create<State>((set, get) => ({
                 }
 
                 set(nextState);
+                if (migration.changed && migration.curves) {
+                    const migratedState = get();
+                    try {
+                        await Promise.all([
+                            saveDesignToDB(patientId, 'right', buildDesignPayload(migratedState, migratedState.archSettingsRight)),
+                            saveDesignToDB(patientId, 'left', buildDesignPayload(migratedState, migratedState.archSettingsLeft)),
+                        ]);
+                    } catch (error) {
+                        console.warn('Failed to persist migrated arch curves to Supabase.', error);
+                    }
+                    savePresetToLocalStorage(patientId, buildPatientPreset(migratedState));
+                }
                 return true;
             }
         } catch (error) {
@@ -613,6 +709,15 @@ export const useStore = create<State>((set, get) => ({
             return false;
         }
 
+        const migration = migrateArchCurves(
+            preset.params.archCurves,
+            preset.params.outlinePoints ?? [],
+        );
+        if (migration.changed) {
+            preset.version = 5;
+            preset.params.archCurves = migration.curves;
+            savePresetToLocalStorage(patientId, preset);
+        }
         applyPresetParams(set, preset.params);
         return true;
     },

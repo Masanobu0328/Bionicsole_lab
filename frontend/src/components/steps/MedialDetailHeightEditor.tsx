@@ -76,18 +76,27 @@ export default function MedialDetailHeightEditor({
         return d;
     };
 
-    const getSvgY = useCallback((e: MouseEvent): number | null => {
+    const getSvgY = useCallback((e: { clientY: number }): number | null => {
         if (!svgRef.current) return null;
         const rect = svgRef.current.getBoundingClientRect();
         return (e.clientY - rect.top) * (H / rect.height);
     }, []);
+
+    // Where inside the handle the drag started, in SVG units. The height used to be
+    // read straight off the cursor, so grabbing a control point anywhere but its exact
+    // centre snapped the value by that offset on the first mousemove - the handle is
+    // 4.5-6 units across, several tenths of a millimetre, so the point visibly jumped
+    // the moment it was touched. Holding the offset keeps the point under the cursor.
+    const grabOffsetRef = useRef(0);
 
     useEffect(() => {
         if (draggingIdx === null) return;
         const onMove = (e: MouseEvent) => {
             const svgY = getSvgY(e);
             if (svgY === null) return;
-            const mm = Math.round(Math.max(0, Math.min(maxH, svgYToMm(svgY))) * 10) / 10;
+            const mm = Math.round(
+                Math.max(0, Math.min(maxH, svgYToMm(svgY - grabOffsetRef.current))) * 10
+            ) / 10;
             const newH = [...heights];
             newH[draggingIdx] = mm;
             onChange(newH);
@@ -205,6 +214,8 @@ export default function MedialDetailHeightEditor({
                                     style={{ cursor: 'ns-resize' }}
                                     onMouseDown={(e) => {
                                         e.stopPropagation();
+                                        const svgY = getSvgY(e);
+                                        grabOffsetRef.current = svgY === null ? 0 : svgY - pt.y;
                                         setDraggingIdx(i - 1);
                                     }}
                                 />

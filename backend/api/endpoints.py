@@ -81,6 +81,9 @@ class ArchSettings(BaseModel):
     medial_detail_heights: List[float] = []
     transverse_detail_enabled: bool = False
     transverse_detail_heights: List[float] = []
+    subtalar_pattern: Optional[str] = None
+    first_ray_pattern: Optional[str] = None
+    pronation_h1: Optional[Dict[str, float]] = None
 
 
 class CurvePoint(BaseModel):
@@ -89,6 +92,7 @@ class CurvePoint(BaseModel):
 
 
 class ArchCurves(BaseModel):
+    schemaVersion: Optional[int] = None
     medial: List[CurvePoint]
     medialFlat: Optional[List[CurvePoint]] = None
     lateral: List[CurvePoint]
@@ -120,6 +124,13 @@ class InsoleParams(BaseModel):
     landmark_config: Optional[Dict[str, float]] = None
     arch_curves: Optional[ArchCurves] = None
     bottom_outline_points: Optional[List[Dict[str, float]]] = None
+    # 4.0 is the product default the editor ships with. It used to read 0.0 here,
+    # so any caller that omitted the field silently got a square bottom edge.
+    bottom_rounding_mm: float = 4.0
+    wall_dish_reach_mm: float = 10.0
+    medial_band_drop_bias: float = 2.0
+    lateral_band_drop_bias: float = 1.0
+    wall_first_stage_deg: float = 15.0
 
 
 class Patient(BaseModel):
@@ -246,6 +257,9 @@ def generate_insole_worker(
         print(f"[DEBUG] Processed landmark_settings: {landmark_settings}")
 
         arch_curves_dict = params.arch_curves.model_dump() if params.arch_curves else None
+        if arch_curves_dict:
+            # Persistence metadata is intentionally not part of the geometry core input.
+            arch_curves_dict.pop("schemaVersion", None)
 
         mesh = generate_insole_from_outline(
             outline_points=params.outline_points,
@@ -262,11 +276,18 @@ def generate_insole_worker(
             arch_curves=arch_curves_dict,
             progress_callback=progress_callback,
             bottom_outline_points=params.bottom_outline_points,
+            bottom_rounding_mm=params.bottom_rounding_mm,
+            wall_dish_reach_mm=params.wall_dish_reach_mm,
+            medial_band_drop_bias=params.medial_band_drop_bias,
+            lateral_band_drop_bias=params.lateral_band_drop_bias,
+            wall_first_stage_deg=params.wall_first_stage_deg,
         )
 
         import numpy as np
 
-        if params.foot_side == "right":
+        # The editable outline is the right-foot reference. Mirror only the completed
+        # left mesh; mirroring right here would swap medial and lateral a second time.
+        if params.foot_side == "left":
             y_min = float(mesh.vertices[:, 1].min())
             y_max = float(mesh.vertices[:, 1].max())
             mirror = np.array([
@@ -276,7 +297,7 @@ def generate_insole_worker(
                 [0, 0, 0, 1],
             ], dtype=float)
             mesh.apply_transform(mirror)
-            print("[DEBUG] Applied Y-mirror for right foot")
+            print("[DEBUG] Applied Y-mirror for left foot")
 
         lattice_info = None
         if params.enable_lattice:

@@ -43,11 +43,15 @@ export type ArchSettings = {
     medial_detail_heights: number[];
     transverse_detail_enabled: boolean;
     transverse_detail_heights: number[];
+    subtalar_pattern?: 'pronation' | 'supination' | 'custom';
+    first_ray_pattern?: 'plantarflexion' | 'dorsiflexion' | 'custom';
+    pronation_h1?: CurvePoint | null;
 };
 
 export type CurvePoint = { x: number; y: number };
 
 export type ArchCurves = {
+    schemaVersion?: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
     medial: CurvePoint[];
     medialFlat?: CurvePoint[];
     lateral: CurvePoint[];
@@ -79,6 +83,11 @@ export type InsoleParams = {
     landmark_config?: Record<string, number>;
     arch_curves?: ArchCurves;
     bottom_outline_points?: Point[];
+    bottom_rounding_mm?: number;
+    wall_dish_reach_mm?: number;
+    medial_band_drop_bias?: number;
+    lateral_band_drop_bias?: number;
+    wall_first_stage_deg?: number;
 };
 
 export type GenerateResponse = {
@@ -106,6 +115,11 @@ export type DesignRecord = {
     wall_height_offset?: number | null;
     wall_height_offset_mm?: number | null;
     heel_cup_height?: number | null;
+    bottom_rounding_mm?: number | null;
+    wall_dish_reach_mm?: number | null;
+    medial_band_drop_bias?: number | null;
+    lateral_band_drop_bias?: number | null;
+    wall_first_stage_deg?: number | null;
     medial_wall_height?: number | null;
     medial_wall_peak_x?: number | null;
     lateral_wall_height?: number | null;
@@ -130,6 +144,11 @@ export type DesignSaveParams = {
     base_thickness: number;
     wall_height_offset: number;
     heel_cup_height: number;
+    bottom_rounding_mm: number;
+    wall_dish_reach_mm: number;
+    medial_band_drop_bias: number;
+    lateral_band_drop_bias: number;
+    wall_first_stage_deg: number;
     medial_wall_height: number;
     medial_wall_peak_x: number;
     lateral_wall_height: number;
