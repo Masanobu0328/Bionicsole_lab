@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.api.auth import get_current_practitioner_optional
+from backend.api.auth import get_current_practitioner, get_current_practitioner_optional
 from backend.api.supabase_client import get_supabase
 
 # Ensure core modules can be imported
@@ -343,6 +343,16 @@ def generate_insole_worker(
                         glb_storage_path=glb_storage_path,
                         stl_storage_path=stl_storage_path,
                     )
+
+                # The copies on the server's own disk were only ever a step on
+                # the way to Supabase. Once the signed URLs exist, keeping them
+                # leaves patient geometry sitting under a name anyone can guess
+                # from the patient code, so drop them.
+                for path in (glb_path, stl_path):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as unlink_error:
+                        print(f"[WARNING] Could not remove {path}: {unlink_error}")
             except Exception as storage_error:
                 print(f"[WARNING] Supabase upload failed: {storage_error}")
 
@@ -359,7 +369,7 @@ def generate_insole_worker(
 
 
 @router.get("/patients", response_model=List[Patient])
-async def list_patients():
+async def list_patients(practitioner_id: str = Depends(get_current_practitioner)):
     patients_dir = PROJECT_ROOT / "patients"
     if not patients_dir.exists():
         return []
@@ -414,10 +424,26 @@ async def get_task_status(task_id: str):
 
 
 @router.get("/exports/{filename}")
-async def get_export(filename: str):
+async def get_export(
+    filename: str,
+    practitioner_id: str = Depends(get_current_practitioner),
+):
+    """Serve a mesh left on local disk. Signed-in callers only.
+
+    This used to answer anyone. Export names are built from the patient code
+    (generated_P-0001_right.glb), so an open route here handed out patient
+    geometry to whoever could count, which undid the signed URLs and the
+    bucket policies protecting exactly the same files in Supabase.
+    """
     from fastapi.responses import FileResponse
 
-    file_path = PROJECT_ROOT / "exports" / filename
-    if file_path.exists():
+    exports_dir = (PROJECT_ROOT / "exports").resolve()
+    file_path = (exports_dir / filename).resolve()
+
+    # Reject anything that climbs out of the exports directory.
+    if file_path.parent != exports_dir:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if file_path.is_file():
         return FileResponse(file_path)
     raise HTTPException(status_code=404, detail="File not found")
