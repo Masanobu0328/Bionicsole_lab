@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from pydantic import BaseModel
 
 from backend.api.auth import get_current_practitioner, get_current_practitioner_optional
+from backend.api.retention import prune_quietly
 from backend.api.supabase_client import get_supabase
 
 # Ensure core modules can be imported
@@ -342,6 +343,9 @@ def generate_insole_worker(
                         params=params,
                         glb_storage_path=glb_storage_path,
                         stl_storage_path=stl_storage_path,
+                    )
+                    prune_quietly(
+                        get_supabase(), patient_record["id"], params.foot_side
                     )
 
                 # The copies on the server's own disk were only ever a step on
