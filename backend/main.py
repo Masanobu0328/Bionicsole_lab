@@ -31,14 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.staticfiles import StaticFiles
-
 app.include_router(api_router, prefix="/api/v1")
 
-# Mount exports directory for static file serving
-exports_dir = Path(__file__).parent.parent / "exports"
-exports_dir.mkdir(exist_ok=True)
-app.mount("/exports", StaticFiles(directory=str(exports_dir)), name="exports")
+# The exports directory used to be mounted here as StaticFiles, which served
+# every generated mesh to anyone who asked - no login, and names derived from
+# the patient code. Nothing in the frontend used it: downloads go through the
+# Supabase signed URLs, and /api/v1/exports/{filename} covers the rest behind
+# authentication. Do not mount it again.
 
 @app.get("/")
 async def root():
