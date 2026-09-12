@@ -7,12 +7,20 @@ from fastapi import Header, HTTPException
 from supabase import Client, create_client
 
 
+class AuthConfigError(RuntimeError):
+    """The server cannot check tokens at all - not the caller's fault."""
+
+
 def get_supabase_admin() -> Client:
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
-    return create_client(url, key)
+    missing = [n for n, v in (("SUPABASE_URL", url), ("SUPABASE_SERVICE_ROLE_KEY", key)) if not v]
+    if missing:
+        raise AuthConfigError("missing environment: " + ", ".join(missing))
+    try:
+        return create_client(url, key)
+    except Exception as exc:
+        raise AuthConfigError(f"could not build the Supabase admin client: {exc}") from exc
 
 
 async def get_current_practitioner(authorization: Optional[str] = Header(default=None)) -> str:
@@ -21,11 +29,25 @@ async def get_current_practitioner(authorization: Optional[str] = Header(default
 
     token = authorization.replace("Bearer ", "", 1).strip()
 
+    # Build the client first, on its own. Folding this into the same try as the
+    # token check reported a server misconfiguration as "Invalid token": with
+    # SUPABASE_SERVICE_ROLE_KEY unset the backend never called Supabase at all,
+    # yet every signed-in user was told their token was bad. 401 is a claim about
+    # the caller, so only say it when Supabase actually rejected them.
     try:
         supabase = get_supabase_admin()
+    except AuthConfigError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Server auth is not configured: {exc}",
+        ) from exc
+
+    try:
         user = supabase.auth.get_user(token)
     except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid token") from exc
+        raise HTTPException(
+            status_code=401, detail=f"Invalid token: {exc}"
+        ) from exc
 
     if not user or not getattr(user, "user", None):
         raise HTTPException(status_code=401, detail="Invalid token")
