@@ -503,3 +503,79 @@ export async function getTaskStatus(taskId: string): Promise<TaskStatus> {
 export function getDownloadUrl(filename: string): string {
     return resolveApiUrl(`/exports/${filename}`);
 }
+
+export type GenerationHistoryEntry = {
+    id: string;
+    createdAt: string;
+    glbUrl: string;
+    stlUrl: string | null;
+};
+
+// Matches backend/api/retention.py DEFAULT_KEEP: older generations have had
+// their meshes deleted, so asking for more than this returns entries that
+// cannot be opened.
+export const GENERATION_HISTORY_LIMIT = 3;
+
+/**
+ * The last few generations for one foot, newest first, ready to open.
+ *
+ * Read straight from Supabase rather than through the backend: row-level
+ * security already limits generation_jobs to the signed-in practitioner, and
+ * the storage policy limits signed URLs to their own folder, so going via the
+ * API would only re-implement both with the service role key.
+ */
+export async function fetchGenerationHistory(
+    patientCode: string,
+    footSide: 'left' | 'right',
+    limit: number = GENERATION_HISTORY_LIMIT,
+): Promise<GenerationHistoryEntry[]> {
+    const { data: patient, error: patientError } = await supabase
+        .from('patients')
+        .select('id')
+        .eq('patient_code', patientCode)
+        .limit(1)
+        .maybeSingle();
+
+    if (patientError || !patient) return [];
+
+    const { data: jobs, error: jobsError } = await supabase
+        .from('generation_jobs')
+        .select('id, created_at, glb_storage_path, stl_storage_path')
+        .eq('patient_id', (patient as { id: string }).id)
+        .eq('foot_side', footSide)
+        .not('glb_storage_path', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+    if (jobsError || !jobs?.length) return [];
+
+    const rows = jobs as {
+        id: string;
+        created_at: string;
+        glb_storage_path: string;
+        stl_storage_path: string | null;
+    }[];
+
+    // One round trip for every URL, rather than one per file.
+    const paths = rows.flatMap((r) =>
+        r.stl_storage_path ? [r.glb_storage_path, r.stl_storage_path] : [r.glb_storage_path],
+    );
+    const { data: signed } = await supabase.storage
+        .from('exports')
+        .createSignedUrls(paths, 3600);
+
+    const urlFor = new Map(
+        (signed ?? [])
+            .filter((s) => s.signedUrl && !s.error)
+            .map((s) => [s.path as string, s.signedUrl as string]),
+    );
+
+    return rows
+        .map((r) => ({
+            id: r.id,
+            createdAt: r.created_at,
+            glbUrl: urlFor.get(r.glb_storage_path) ?? '',
+            stlUrl: r.stl_storage_path ? urlFor.get(r.stl_storage_path) ?? null : null,
+        }))
+        .filter((e) => e.glbUrl !== '');
+}

@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { generateInsole, getDownloadUrl, getTaskStatus, resolveApiUrl } from '@/lib/api';
+import type { GenerationHistoryEntry } from '@/lib/api';
+import GenerationHistory from '@/components/steps/GenerationHistory';
 import { densifyClosedPolygon } from '@/lib/geometry-utils';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -253,6 +255,9 @@ export default function PreviewStep() {
                         }
                         const urls = { download: glbUrl, stl: stlUrl };
                         setResultsBySide((current) => ({ ...current, [side]: urls }));
+                        // The row for this run exists now; reload both lists so
+                        // it shows up and the pruned tail drops off.
+                        setHistoryKey((k) => k + 1);
                         updateGeneration(side, {
                             status: 'completed',
                             progress: 100,
@@ -357,6 +362,15 @@ export default function PreviewStep() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Bumped when a generation completes, so the history lists reload and the
+    // run that just finished appears at the top of them.
+    const [historyKey, setHistoryKey] = useState(0);
+
+    const openHistoryEntry = (side: FootSide) => (entry: GenerationHistoryEntry) => {
+        setDisplaySide(side);
+        setCurrentModelUrl(entry.glbUrl);
+    };
+
     const showSide = (side: FootSide) => {
         const urls = resultsBySide[side];
         if (!urls || generationBySide[side].status !== 'completed') return;
@@ -430,6 +444,13 @@ export default function PreviewStep() {
                             <span>{generationBySide.left.error}</span>
                         </div>
                     )}
+                    <GenerationHistory
+                        patientCode={selectedPatient.id}
+                        footSide="left"
+                        reloadKey={historyKey}
+                        activeUrl={displaySide === 'left' ? currentModelUrl : null}
+                        onOpen={openHistoryEntry('left')}
+                    />
                 </div>
 
                 {/* Right Foot */}
@@ -478,6 +499,13 @@ export default function PreviewStep() {
                             <span>{generationBySide.right.error}</span>
                         </div>
                     )}
+                    <GenerationHistory
+                        patientCode={selectedPatient.id}
+                        footSide="right"
+                        reloadKey={historyKey}
+                        activeUrl={displaySide === 'right' ? currentModelUrl : null}
+                        onOpen={openHistoryEntry('right')}
+                    />
                 </div>
 
                 {/* Download Buttons */}
