@@ -164,6 +164,41 @@ def lookup_patient_db_record(patient_code: str, practitioner_id: str) -> Optiona
         return None
 
 
+# The side whose mesh gets mirrored. The editable outline is the LEFT-foot
+# reference, so the right mesh is the mirrored one. This was the other way
+# round, and printed parts came out swapped: the file labelled right was a
+# left insole and the one labelled left was a right insole.
+#
+# Only the label was ever wrong. The engine builds a single mesh and the
+# mirror flips the whole of it, arch included - measured, the two sides agree
+# to 0.0000mm once one is flipped back - so each side was already a coherent
+# insole, merely of the opposite foot to its name. Traced outlines match the
+# handedness of the scanned reference in patients/0001 (a 62% better fit than
+# their own mirror), so this single condition covers every patient.
+MIRRORED_FOOT_SIDE = "right"
+
+
+def apply_foot_side_orientation(mesh, foot_side: str) -> bool:
+    """Mirror the mesh across its own y-centre if this is the mirrored side.
+
+    Returns whether it mirrored, so the caller can log it.
+    """
+    if foot_side != MIRRORED_FOOT_SIDE:
+        return False
+
+    import numpy as np
+
+    y_min = float(mesh.vertices[:, 1].min())
+    y_max = float(mesh.vertices[:, 1].max())
+    mesh.apply_transform(np.array([
+        [1, 0, 0, 0],
+        [0, -1, 0, y_min + y_max],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ], dtype=float))
+    return True
+
+
 def upload_to_storage(
     practitioner_id: str,
     patient_code: str,
@@ -284,21 +319,8 @@ def generate_insole_worker(
             wall_first_stage_deg=params.wall_first_stage_deg,
         )
 
-        import numpy as np
-
-        # The editable outline is the right-foot reference. Mirror only the completed
-        # left mesh; mirroring right here would swap medial and lateral a second time.
-        if params.foot_side == "left":
-            y_min = float(mesh.vertices[:, 1].min())
-            y_max = float(mesh.vertices[:, 1].max())
-            mirror = np.array([
-                [1, 0, 0, 0],
-                [0, -1, 0, y_min + y_max],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1],
-            ], dtype=float)
-            mesh.apply_transform(mirror)
-            print("[DEBUG] Applied Y-mirror for left foot")
+        if apply_foot_side_orientation(mesh, params.foot_side):
+            print(f"[DEBUG] Applied Y-mirror for {params.foot_side} foot")
 
         lattice_info = None
         if params.enable_lattice:
